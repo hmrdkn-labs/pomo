@@ -104,7 +104,12 @@ impl Client {
     }
 
     pub fn post_command(&self, body: &Value) -> Result<Value, Failure> {
-        let r = self.request("POST", "/v1/commands").timeout(Duration::from_secs(30));
+        self.post("/v1/commands", body)
+    }
+
+    /// POST with a JSON body. Long timeout: pairing and syncing dial other Devices.
+    pub fn post(&self, path: &str, body: &Value) -> Result<Value, Failure> {
+        let r = self.request("POST", path).timeout(Duration::from_secs(90));
         Self::json(Self::finish(r.send_json(body))?)
     }
 

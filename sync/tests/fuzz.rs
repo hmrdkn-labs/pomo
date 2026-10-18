@@ -32,7 +32,7 @@ async fn random_logs_and_topologies_converge_to_the_core_fold() {
         edges.shuffle(&mut rng);
         edges.truncate(if rng.gen_bool(0.3) { 3 } else { 2 });
         for &(x, y) in &edges {
-            let ticket = nodes[x].pairing_ticket("n").await.unwrap();
+            let ticket = nodes[x].pairing_ticket("n").await.unwrap().ticket;
             nodes[y].pair(&ticket, "n").await.unwrap();
         }
         let mut clock = T0;

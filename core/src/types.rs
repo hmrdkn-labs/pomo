@@ -460,13 +460,30 @@ pub struct IngestReport {
     pub invalid: Vec<Rejected>,
 }
 
+/// A Device known to this store (`devices` table). `paired` and `revoked` are local trust
+/// state and are never synced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Device {
+    pub device_id: String,
+    pub name: Option<String>,
+    pub paired: bool,
+    pub revoked: bool,
+}
+
 /// Core error.
 #[derive(Debug)]
 pub enum Error {
-    Sqlite(rusqlite::Error),
+    /// Storage failure.
+    Db(rusqlite::Error),
     Json(serde_json::Error),
-    /// Command not valid in the current state, or bad arguments.
-    Invalid(String),
+    /// A bad argument (e.g. a non-positive duration, an empty id).
+    InvalidArgument(String),
+    /// The command is not valid in the current Timer state.
+    InvalidState(String),
+    /// The referenced block or Device does not exist.
+    NotFound(String),
+    /// Events collide with stored ones (`(device_id, seq)` or `(device_id, command_key)` under another id).
+    Conflict(String),
     /// Store belongs to a different device.
     DeviceMismatch { stored: String, requested: String },
 }
@@ -474,9 +491,10 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Sqlite(e) => write!(f, "sqlite: {e}"),
+            Error::Db(e) => write!(f, "db: {e}"),
             Error::Json(e) => write!(f, "json: {e}"),
-            Error::Invalid(m) => write!(f, "invalid command: {m}"),
+            Error::InvalidArgument(m) | Error::InvalidState(m) | Error::NotFound(m) => f.write_str(m),
+            Error::Conflict(m) => write!(f, "conflict: {m}"),
             Error::DeviceMismatch { stored, requested } => {
                 write!(f, "store belongs to device {stored}, not {requested}")
             }
@@ -488,7 +506,7 @@ impl std::error::Error for Error {}
 
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
-        Error::Sqlite(e)
+        Error::Db(e)
     }
 }
 

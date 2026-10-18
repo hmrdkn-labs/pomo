@@ -11,8 +11,10 @@ pub enum Error {
     Conflict(String),
     /// `seq` gap in a frame; nothing from that Device in that frame was stored.
     Gap(String),
-    /// Malformed or unexpected frame, bad ticket, oversized frame.
+    /// Malformed or unexpected frame, oversized frame.
     Protocol(String),
+    /// A pairing ticket that cannot be parsed.
+    BadTicket(String),
     /// Timeout waiting for the peer.
     Timeout(&'static str),
     /// The connection or stream ended unexpectedly.
@@ -22,7 +24,6 @@ pub enum Error {
     /// Test hook dropped the connection.
     Fault,
     Store(pomo_core::Error),
-    Db(rusqlite::Error),
     Io(std::io::Error),
 }
 
@@ -36,12 +37,12 @@ impl fmt::Display for Error {
             Error::Conflict(m) => write!(f, "conflict: {m}"),
             Error::Gap(m) => write!(f, "seq gap: {m}"),
             Error::Protocol(m) => write!(f, "protocol error: {m}"),
+            Error::BadTicket(m) => write!(f, "bad ticket: {m}"),
             Error::Timeout(what) => write!(f, "timeout waiting for {what}"),
             Error::Closed(m) => write!(f, "connection closed: {m}"),
             Error::Net(m) => write!(f, "network: {m}"),
             Error::Fault => write!(f, "injected fault"),
             Error::Store(e) => write!(f, "store: {e}"),
-            Error::Db(e) => write!(f, "db: {e}"),
             Error::Io(e) => write!(f, "io: {e}"),
         }
     }
@@ -52,11 +53,6 @@ impl std::error::Error for Error {}
 impl From<pomo_core::Error> for Error {
     fn from(e: pomo_core::Error) -> Self {
         Error::Store(e)
-    }
-}
-impl From<rusqlite::Error> for Error {
-    fn from(e: rusqlite::Error) -> Self {
-        Error::Db(e)
     }
 }
 impl From<std::io::Error> for Error {

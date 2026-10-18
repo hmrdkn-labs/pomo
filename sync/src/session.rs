@@ -32,8 +32,11 @@ fn advance(vv: &mut VersionVector, events: &[Event]) {
     }
 }
 
-/// Runs the exchange and, when this side is live, live mode. `report_tx` fires once both
-/// `done` frames have crossed.
+/// Runs the exchange and, while the stream stays open, live mode. The stream stays open when
+/// either side is live (`peer_live` is the flag from the peer's hello); a side that is not live
+/// keeps it until the peer sends `bye` or closes. `report_tx` fires once both `done` frames
+/// have crossed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
     inner: &Arc<Inner>,
     conn: &Connection,
@@ -41,6 +44,7 @@ pub(crate) async fn run(
     recv: &mut RecvStream,
     peer: &str,
     peer_vv: VersionVector,
+    peer_live: bool,
     report_tx: Option<oneshot::Sender<SyncReport>>,
 ) -> Result<SyncReport> {
     let shared = Shared {
@@ -70,12 +74,11 @@ pub(crate) async fn run(
                 }
             }
         }
-        let live = inner.is_live();
         let report = SyncReport {
             peer: peer.to_string(),
             sent: shared.sent.load(Ordering::SeqCst),
             received: shared.received.load(Ordering::SeqCst),
-            live,
+            live: inner.is_live() || peer_live,
         };
         *final_report.lock().unwrap() = Some(report.clone());
         if let Some(tx) = report_tx.take() {
@@ -83,15 +86,21 @@ pub(crate) async fn run(
         }
         let ping = inner.opts.ping_interval;
         let mut ticker = interval_at(Instant::now() + ping, ping);
+        let mut was_live = inner.is_live();
         loop {
             if *reader_end_rx.borrow() {
                 return Ok(());
             }
-            if !inner.is_live() {
+            let live = inner.is_live();
+            // Neither side wants the stream, or this side just stopped being live: say bye.
+            // A side that was never live keeps a stream the peer asked for until the peer ends it.
+            if !live && (!peer_live || was_live) {
                 let _ = write_frame(send, &Frame::Bye).await;
                 let _ = send.finish();
                 return Ok(());
             }
+            was_live = live;
+            // Pings keep both sides' idle timers fresh, also on a side that only listens.
             tokio::select! {
                 _ = changed.changed() => send_missing(inner, conn, send, &shared, &mut frames).await?,
                 _ = ticker.tick() => write_frame(send, &Frame::Ping).await?,
@@ -189,10 +198,6 @@ async fn read_loop(inner: &Arc<Inner>, recv: &mut RecvStream, peer: &str, shared
 /// Validates and stores one `events` frame. Returns the number of newly stored events.
 fn ingest_frame(inner: &Arc<Inner>, peer: &str, events: Vec<Event>, shared: &Shared) -> Result<usize> {
     let mut store = inner.store.lock().unwrap();
-    if let Some(msg) = inner.db.seq_conflict(&events)? {
-        tracing::warn!(peer, %msg, "sync session aborted: seq conflict");
-        return Err(Error::Conflict(msg));
-    }
     let vv = store.version_vector()?;
     // Per Device: the unseen seqs must continue the stored run without holes.
     let mut unseen: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
@@ -215,12 +220,14 @@ fn ingest_frame(inner: &Arc<Inner>, peer: &str, events: Vec<Event>, shared: &Sha
         }
     }
     let keep: Vec<Event> = events.iter().filter(|e| !gapped.contains(&e.device_id)).cloned().collect();
-    let report = store.ingest(&keep)?;
-    if !report.conflicts.is_empty() {
-        let m = report.conflicts.iter().map(|r| r.reason.as_str()).collect::<Vec<_>>().join("; ");
-        tracing::warn!(peer, %m, "sync session aborted: conflict");
-        return Err(Error::Conflict(m));
-    }
+    let report = match store.ingest_atomic(&keep) {
+        Ok(r) => r,
+        Err(pomo_core::Error::Conflict(m)) => {
+            tracing::warn!(peer, %m, "sync session aborted: conflict");
+            return Err(Error::Conflict(m));
+        }
+        Err(e) => return Err(e.into()),
+    };
     if !report.invalid.is_empty() {
         tracing::warn!(peer, invalid = report.invalid.len(), "peer sent invalid events");
     }

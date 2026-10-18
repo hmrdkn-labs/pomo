@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use pomod::{Daemon, Options};
+use pomod::{Daemon, Options, SyncMode};
 use serde_json::{json, Value};
 
 struct Td {
@@ -18,7 +18,7 @@ impl Td {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let daemon = rt
-            .block_on(Daemon::start(Options { home: tmp.path().to_path_buf(), port: 0 }))
+            .block_on(Daemon::start(Options { port: 0, sync: SyncMode::Off, ..Options::new(tmp.path().to_path_buf()) }))
             .unwrap();
         let base = format!("http://{}", daemon.addr);
         let token = daemon.token.clone();
@@ -333,7 +333,7 @@ fn state_survives_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let go = |f: &dyn Fn(&str, &str)| {
-        let d = rt.block_on(Daemon::start(Options { home: tmp.path().to_path_buf(), port: 0 })).unwrap();
+        let d = rt.block_on(Daemon::start(Options { port: 0, sync: SyncMode::Off, ..Options::new(tmp.path().to_path_buf()) })).unwrap();
         f(&format!("http://{}", d.addr), &d.token);
         rt.block_on(d.shutdown()).unwrap();
     };

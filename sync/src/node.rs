@@ -1,4 +1,3 @@
-use crate::db::{Db, Trust};
 use crate::error::{Error, Result};
 use crate::session;
 use crate::wire::{read_frame, write_frame, Frame, ALPN, MAX_EVENTS_PER_FRAME};
@@ -105,9 +104,24 @@ struct Offer {
     name: String,
 }
 
+/// A pairing ticket as returned by [`SyncNode::pairing_ticket`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairingTicket {
+    /// `pomo-pair:<base64url json>`.
+    pub ticket: String,
+    pub expires_ms: i64,
+}
+
+/// What this Device thinks of a peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Trust {
+    Paired,
+    Unpaired,
+    Revoked,
+}
+
 pub(crate) struct Inner {
     pub store: Arc<Mutex<Store>>,
-    pub db: Db,
     pub device_id: String,
     pub endpoint: Endpoint,
     pub opts: SyncOptions,
@@ -117,7 +131,6 @@ pub(crate) struct Inner {
     pub changed: watch::Sender<u64>,
     pub ingested: broadcast::Sender<Vec<Event>>,
     offers: Mutex<HashMap<String, Offer>>,
-    addrs: Mutex<HashMap<EndpointId, EndpointAddr>>,
     sessions: Mutex<HashMap<u64, (String, Connection)>>,
     next_session: AtomicU64,
 }
@@ -136,6 +149,43 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 impl Inner {
     pub fn is_live(&self) -> bool {
         self.live.load(Ordering::SeqCst)
+    }
+
+    fn trust(&self, device_id: &str) -> Result<Trust> {
+        Ok(match self.store.lock().unwrap().device(device_id)? {
+            Some(d) if d.revoked => Trust::Revoked,
+            Some(d) if d.paired => Trust::Paired,
+            _ => Trust::Unpaired,
+        })
+    }
+
+    /// Marks the device paired and clears a revocation: pairing is an explicit human act. The
+    /// steps are ordered so that an interruption leaves the device untrusted, never trusted.
+    fn set_paired(&self, device_id: &str, name: &str) -> Result<()> {
+        let mut store = self.store.lock().unwrap();
+        store.upsert_device(device_id, name)?;
+        store.set_device_revoked(device_id, false)?;
+        store.set_device_paired(device_id, true)?;
+        Ok(())
+    }
+
+    fn set_revoked(&self, device_id: &str) -> Result<()> {
+        let mut store = self.store.lock().unwrap();
+        store.set_device_revoked(device_id, true)?;
+        store.set_device_paired(device_id, false)?;
+        Ok(())
+    }
+
+    /// Persists `addr` as the last known address of its endpoint.
+    fn remember(&self, addr: &EndpointAddr) -> Result<()> {
+        let ticket = EndpointTicket::new(addr.clone()).to_string();
+        self.store.lock().unwrap().set_peer_address(&addr.id.to_string(), &ticket, now_ms())?;
+        Ok(())
+    }
+
+    fn address_of(&self, id: &EndpointId) -> Result<Option<EndpointAddr>> {
+        let Some(text) = self.store.lock().unwrap().peer_address(&id.to_string())? else { return Ok(None) };
+        Ok(EndpointTicket::from_str(&text).ok().map(|t| t.endpoint_addr().clone()))
     }
 
     /// Wakes live sessions: new events may be stored.
@@ -174,7 +224,7 @@ impl Inner {
 
     fn own_hello(&self) -> Result<Frame> {
         let vv = self.store.lock().unwrap().version_vector()?;
-        Ok(Frame::Hello { device_id: self.device_id.clone(), vv })
+        Ok(Frame::Hello { device_id: self.device_id.clone(), vv, live: self.is_live() })
     }
 
     /// Listener side of one connection.
@@ -194,7 +244,7 @@ impl Inner {
             }
             match self.check_offer(&secret) {
                 Ok(own_name) => {
-                    self.db.set_paired(&peer, &name)?;
+                    self.set_paired(&peer, &name)?;
                     write_frame(&mut send, &Frame::PairOk { device_id: self.device_id.clone(), name: own_name })
                         .await?;
                 }
@@ -204,19 +254,19 @@ impl Inner {
                 .await
                 .map_err(|_| Error::Timeout("hello"))??;
         }
-        let Frame::Hello { device_id, vv } = first else {
+        let Frame::Hello { device_id, vv, live: peer_live } = first else {
             return Err(Error::Protocol(format!("expected hello, got {first:?}")));
         };
         if device_id != peer {
             return reject(&conn, &mut send, "unpaired").await;
         }
-        match self.db.trust(&peer)? {
+        match self.trust(&peer)? {
             Trust::Paired => {}
             Trust::Unpaired => return reject(&conn, &mut send, "unpaired").await,
             Trust::Revoked => return reject(&conn, &mut send, "revoked").await,
         }
         write_frame(&mut send, &self.own_hello()?).await?;
-        session::run(self, &conn, &mut send, &mut recv, &peer, vv, None).await?;
+        session::run(self, &conn, &mut send, &mut recv, &peer, vv, peer_live, None).await?;
         Ok(())
     }
 
@@ -242,8 +292,8 @@ impl Inner {
         let reply = timeout(Duration::from_secs(10), read_frame(&mut recv))
             .await
             .map_err(|_| Error::Timeout("hello"))??;
-        let vv = match reply {
-            Frame::Hello { device_id, vv } if device_id == peer => vv,
+        let (vv, peer_live) = match reply {
+            Frame::Hello { device_id, vv, live } if device_id == peer => (vv, live),
             Frame::Reject { reason } => {
                 conn.close(0u32.into(), b"rejected");
                 return Err(Error::Rejected(reason));
@@ -254,7 +304,7 @@ impl Inner {
         let inner = self.clone();
         let task = tokio::spawn(async move {
             let guard = inner.register(&peer, &conn);
-            let res = session::run(&inner, &conn, &mut send, &mut recv, &peer, vv, Some(tx)).await;
+            let res = session::run(&inner, &conn, &mut send, &mut recv, &peer, vv, peer_live, Some(tx)).await;
             drop(guard);
             // Let the listener close first so our last frames are delivered.
             let _ = timeout(Duration::from_secs(5), conn.closed()).await;
@@ -325,18 +375,12 @@ impl SyncNode {
     pub async fn open(db_path: impl AsRef<Path>, opts: SyncOptions) -> Result<SyncNode> {
         let db_path = db_path.as_ref();
         let (store, key) = open_store(db_path, &default_key_path(db_path))?;
-        SyncNode::start(Arc::new(Mutex::new(store)), db_path, key, opts).await
+        SyncNode::start(Arc::new(Mutex::new(store)), key, opts).await
     }
 
     /// Starts a node over an open store. `store` must have been opened with
-    /// `secret.public().to_string()` as its device id (see [`open_store`]) and `db_path` is
-    /// that store's database file.
-    pub async fn start(
-        store: Arc<Mutex<Store>>,
-        db_path: impl AsRef<Path>,
-        secret: SecretKey,
-        opts: SyncOptions,
-    ) -> Result<SyncNode> {
+    /// `secret.public().to_string()` as its device id (see [`open_store`]).
+    pub async fn start(store: Arc<Mutex<Store>>, secret: SecretKey, opts: SyncOptions) -> Result<SyncNode> {
         let device_id = secret.public().to_string();
         let stored = store.lock().unwrap().device_id().to_string();
         if stored != device_id {
@@ -355,7 +399,6 @@ impl SyncNode {
         let (ingested, _) = broadcast::channel(256);
         let inner = Arc::new(Inner {
             store,
-            db: Db::open(db_path.as_ref())?,
             device_id,
             endpoint: endpoint.clone(),
             live: AtomicBool::new(opts.live),
@@ -364,7 +407,6 @@ impl SyncNode {
             changed,
             ingested,
             offers: Mutex::new(HashMap::new()),
-            addrs: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(0),
         });
@@ -398,8 +440,10 @@ impl SyncNode {
         self.inner.notify();
     }
 
-    /// Live mode: after the exchange, sessions stay open and forward new events. When off,
-    /// sessions end with `bye` after both `done`s (also ends existing live sessions).
+    /// Live mode: the node asks peers to keep sessions open (the hello carries the flag) and
+    /// forwards new events on them. A session stays open while either side is live; a side
+    /// that is not live keeps it until the peer says `bye` or closes. When neither side is
+    /// live, sessions end with `bye` after both `done`s. The peer's flag is as of its hello.
     pub fn set_live(&self, live: bool) {
         self.inner.live.store(live, Ordering::SeqCst);
         self.inner.notify();
@@ -423,7 +467,7 @@ impl SyncNode {
 
     /// Creates a pairing ticket `pomo-pair:<base64url(json {ticket, secret, name})>`, valid for
     /// `ticket_ttl` and one use. `name` is this Device's name as shown to the joiner.
-    pub async fn pairing_ticket(&self, name: &str) -> Result<String> {
+    pub async fn pairing_ticket(&self, name: &str) -> Result<PairingTicket> {
         self.wait_online().await;
         let mut secret = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut secret);
@@ -433,15 +477,9 @@ impl SyncNode {
             secret: secret.clone(),
             name: name.to_string(),
         };
-        self.inner.offers.lock().unwrap().insert(
-            secret,
-            Offer {
-                expires_ms: now_ms() + self.inner.opts.ticket_ttl.as_millis() as i64,
-                used: false,
-                name: name.to_string(),
-            },
-        );
-        Ok(format!("{PAIR_PREFIX}{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&body)?)))
+        let expires_ms = now_ms() + self.inner.opts.ticket_ttl.as_millis() as i64;
+        self.inner.offers.lock().unwrap().insert(secret, Offer { expires_ms, used: false, name: name.to_string() });
+        Ok(PairingTicket { ticket: format!("{PAIR_PREFIX}{}", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&body)?)), expires_ms })
     }
 
     /// Joins the Device that offered `ticket`: pairing handshake, then a normal exchange.
@@ -449,16 +487,16 @@ impl SyncNode {
         let body = ticket
             .trim()
             .strip_prefix(PAIR_PREFIX)
-            .ok_or_else(|| Error::Protocol("not a pairing ticket".into()))?;
-        let raw = URL_SAFE_NO_PAD.decode(body).map_err(|e| Error::Protocol(format!("ticket: {e}")))?;
-        let body: TicketBody = serde_json::from_slice(&raw)?;
+            .ok_or_else(|| Error::BadTicket("not a pairing ticket".into()))?;
+        let raw = URL_SAFE_NO_PAD.decode(body).map_err(|e| Error::BadTicket(e.to_string()))?;
+        let body: TicketBody = serde_json::from_slice(&raw).map_err(|e| Error::BadTicket(e.to_string()))?;
         let addr = EndpointTicket::from_str(&body.ticket)
-            .map_err(|e| Error::Protocol(format!("ticket: {e}")))?
+            .map_err(|e| Error::BadTicket(e.to_string()))?
             .endpoint_addr()
             .clone();
         let peer = addr.id.to_string();
         let inner = &self.inner;
-        inner.addrs.lock().unwrap().insert(addr.id, addr.clone());
+        inner.remember(&addr)?;
         let (conn, mut send, mut recv) = inner.connect(addr).await?;
         write_frame(
             &mut send,
@@ -476,53 +514,66 @@ impl SyncNode {
             }
             other => return Err(Error::Protocol(format!("expected pair_ok, got {other:?}"))),
         };
-        inner.db.set_paired(&peer, &name)?;
+        inner.set_paired(&peer, &name)?;
         let sync = inner.dialed_session(conn, send, recv, peer.clone()).await?;
         Ok(PairOutcome { device_id: peer, name, sync })
     }
 
-    /// Runs one session with a paired Device. `target` is its device id (the address is known
-    /// from an earlier ticket, or found by address lookup on [`Network::N0`]) or an endpoint
-    /// ticket from [`Self::endpoint_ticket`].
+    /// Runs one session with a paired Device. `target` is its device id (the address is the
+    /// last one remembered from a ticket, persisted across restarts, or found by address
+    /// lookup on [`Network::N0`]) or an endpoint ticket from [`Self::endpoint_ticket`].
     pub async fn sync_with(&self, target: &str) -> Result<SyncReport> {
         let target = target.trim();
         if target.starts_with(PAIR_PREFIX) {
-            return Err(Error::Protocol("pairing tickets are for pair()".into()));
+            return Err(Error::BadTicket("pairing tickets are for pair()".into()));
         }
         let inner = &self.inner;
         let addr = match EndpointTicket::from_str(target) {
             Ok(t) => {
                 let addr = t.endpoint_addr().clone();
-                inner.addrs.lock().unwrap().insert(addr.id, addr.clone());
+                inner.remember(&addr)?;
                 addr
             }
             Err(_) => {
                 let id = EndpointId::from_str(target).map_err(|e| Error::Protocol(format!("target: {e}")))?;
-                let known = inner.addrs.lock().unwrap().get(&id).cloned();
-                known.unwrap_or_else(|| EndpointAddr::new(id))
+                inner.address_of(&id)?.unwrap_or_else(|| EndpointAddr::new(id))
             }
         };
         let peer = addr.id.to_string();
-        if inner.db.trust(&peer)? != Trust::Paired {
+        if inner.trust(&peer)? != Trust::Paired {
             return Err(Error::NotPaired(peer));
         }
         let (conn, send, recv) = inner.connect(addr).await?;
         inner.dialed_session(conn, send, recv, peer).await
     }
 
+    /// Whether [`Self::sync_with`] has an address for `device_id`: a remembered one, or any on
+    /// [`Network::N0`] where address lookup finds the endpoint.
+    pub fn knows_address(&self, device_id: &str) -> bool {
+        self.inner.opts.network == Network::N0
+            || EndpointId::from_str(device_id)
+                .ok()
+                .is_some_and(|id| self.inner.address_of(&id).ok().flatten().is_some())
+    }
+
+    /// Whether a session (either direction) with `device_id` is open right now.
+    pub fn has_session(&self, device_id: &str) -> bool {
+        self.inner.sessions.lock().unwrap().values().any(|(peer, _)| peer == device_id)
+    }
+
     /// Marks a Device as paired locally, without the handshake (the other side must trust this
     /// Device too before a session is accepted).
     pub fn trust_device(&self, device_id: &str, name: &str) -> Result<()> {
-        self.inner.db.set_paired(device_id, name)
+        self.inner.set_paired(device_id, name)
     }
 
     pub fn is_paired(&self, device_id: &str) -> Result<bool> {
-        Ok(self.inner.db.trust(device_id)? == Trust::Paired)
+        Ok(self.inner.trust(device_id)? == Trust::Paired)
     }
 
     /// Revokes a Device and closes its open sessions.
     pub fn revoke(&self, device_id: &str) -> Result<()> {
-        self.inner.db.revoke(device_id)?;
+        self.inner.set_revoked(device_id)?;
         for (peer, conn) in self.inner.sessions.lock().unwrap().values() {
             if peer == device_id {
                 conn.close(2u32.into(), b"revoked");

@@ -14,6 +14,7 @@ Store::open_in_memory_with(device_id, config: Config) -> Result<Store>
 store.device_id() -> &str
 store.apply(cmd: Command, source: Source, now_ms: i64) -> Result<Event>        // HLC, seq, command_key idempotency, validity
 store.ingest(events: &[Event]) -> Result<IngestReport>                          // idempotent by id; seq/command_key conflicts rejected into report.conflicts
+store.ingest_atomic(events: &[Event]) -> Result<IngestReport>                   // same, but any conflict -> Err(Error::Conflict), nothing stored
 store.version_vector() -> Result<VersionVector>                                 // BTreeMap<device_id, max seq>
 store.events_after(vv: &VersionVector) -> Result<Vec<Event>>                    // ordered by (device_id, seq)
 store.events() -> Result<Vec<Event>>                                            // total order
@@ -22,9 +23,20 @@ store.blocks(range: Range, now_ms: i64) -> Result<Vec<Block>>                   
 store.projected_blocks(range: Range) -> Result<Vec<Block>>                      // raw table rows == fold(events)
 store.stats(range: Range, tz_offset_min: i32, now_ms: i64) -> Result<Stats>
 store.rebuild_projections() -> Result<()>
+
+// Devices (table `devices`; `paired`/`revoked` are local trust state, never synced)
+store.device(id) -> Result<Option<Device>>
+store.devices() -> Result<Vec<Device>>                                          // own Device included, ordered by id
+store.upsert_device(id, name) -> Result<()>                                     // records the Device, sets its name, trust untouched
+store.set_device_paired(id, bool) -> Result<()>                                 // records the Device when new; independent of `revoked`
+store.set_device_revoked(id, bool) -> Result<()>
+
+// Peer addresses (table `peers`, migration 0002; local only, opaque string, e.g. an iroh endpoint ticket)
+store.peer_address(id) -> Result<Option<String>>
+store.set_peer_address(id, address, now_ms) -> Result<()>
 ```
 
-`apply` errors with `Error::Invalid` and writes nothing when the command is not valid. A used `(device_id, command_key)` returns the original event.
+`apply` errors and writes nothing when the command is not valid: `InvalidArgument` (non-positive `planned_ms`/`add_ms`), `InvalidState` (nothing to pause, no live block, ...), `NotFound` (unknown block id). A used `(device_id, command_key)` returns the original event.
 A store is bound to the `device_id` it was created with (`Error::DeviceMismatch` otherwise).
 Ingest does not require gap-free `seq`; `events_after` uses max seq per device, so peers must ship each device's events in `seq` order without holes (the sync layer's job).
 
@@ -52,7 +64,8 @@ CommandBody::{ Start{kind,planned_ms,label,project}, Pause, Resume, Extend{add_m
 Range { from_ms, to_ms }  // half-open on started_ms; Range::ALL
 Stats { focus_ms_by_day: BTreeMap<"YYYY-MM-DD", i64>, focus_ms_total, completed_focus, streak_days }
 IngestReport { inserted, duplicates, conflicts: Vec<Rejected>, invalid: Vec<Rejected> }
-Error::{ Sqlite, Json, Invalid, DeviceMismatch }
+Device { device_id, name: Option<String>, paired, revoked }
+Error::{ Db, Json, InvalidArgument, InvalidState, NotFound, Conflict, DeviceMismatch }
 ```
 
 Stats count each block's stored `elapsed_ms` (a live block counts the time elapsed up to its last pause/start, not up to `now`). Days use a fixed UTC offset; IANA names are not supported.

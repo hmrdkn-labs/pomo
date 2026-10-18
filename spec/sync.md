@@ -7,6 +7,7 @@ Peer-to-peer over [iroh](https://docs.iroh.computer/) connections. No server. A 
 - ALPN: `pomo/sync/1`.
 - One bidirectional QUIC stream per sync session, opened by the dialing Device.
 - Frames: 4-byte big-endian length, then a UTF-8 JSON object with a `t` field. Maximum frame 4 MiB.
+- A Device remembers the last known address (the iroh endpoint ticket) of each peer it paired with or was given a ticket for, in the local `peers` table (migration `0002_peers.sql`; never synced), so it can dial by `device_id` after a restart.
 
 ## Trust
 
@@ -21,11 +22,11 @@ Peer-to-peer over [iroh](https://docs.iroh.computer/) connections. No server. A 
 
 ## Exchange
 
-1. Dialer sends `{"t":"hello","device_id":"...","vv":{"<device_id>": <max seq>, ...}}`.
-2. Listener replies with its own `hello`. A Device that does not trust the peer replies `{"t":"reject","reason":"unpaired|revoked"}` and closes.
-3. Each side computes the events the other lacks (events with `seq > vv[device_id]`, in total order) and sends them as `{"t":"events","events":[...]}` frames of at most 500 events, then `{"t":"done"}`. Each side ingests received events (idempotent by id; a `(device_id, seq)` conflict aborts the session and is logged).
-4. After both `done`s the stream stays open in **live mode** when either side is a Daemon or app in the foreground: each newly stored event (local or ingested) is forwarded as an `events` frame to peers that have not got it. A side that is not running live closes the stream with `{"t":"bye"}`.
-5. A `ping` frame every 20 s in live mode; 60 s without any frame closes the session.
+1. Dialer sends `{"t":"hello","device_id":"...","vv":{"<device_id>": <max seq>, ...},"live":<bool>}`. `live` is true when the sender is a Daemon or an app in the foreground and wants the stream kept open; an absent `live` means false.
+2. Listener replies with its own `hello` (same fields, its own `live`). A Device that does not trust the peer replies `{"t":"reject","reason":"unpaired|revoked"}` and closes.
+3. Each side computes the events the other lacks (events with `seq > vv[device_id]`, in total order) and sends them as `{"t":"events","events":[...]}` frames of at most 500 events, then `{"t":"done"}`. Each side ingests received events (idempotent by id). A frame is stored all or nothing: a `(device_id, seq)` conflict anywhere in it stores nothing from the frame, aborts the session and is logged.
+4. After both `done`s the stream stays open in **live mode** when **either** side's hello had `live: true`: each newly stored event (local or ingested) is forwarded as an `events` frame to the peer. A side that is not live, but whose peer is, has finished sending but keeps the stream until the peer sends `{"t":"bye"}` or closes. When neither hello was live, both sides send `bye` and close. A side that stops being live during the session (a Daemon never does; an app does when it goes to the background) sends `bye`. The peer's flag is the one from its hello; it is not updated mid-session.
+5. In live mode both sides send a `ping` frame every 20 s (so a side that only listens is not timed out); 60 s without any frame closes the session.
 
 Gaps in `seq` from one Device (events missing in the middle) are not possible because each side sends all events above the peer's vector entry; a receiver that sees a gap anyway stores nothing from that Device in that frame and asks again by closing and reconnecting.
 

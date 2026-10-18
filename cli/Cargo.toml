@@ -17,6 +17,7 @@ ureq = { version = "2", features = ["json"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 pomod = { path = "../daemon" }

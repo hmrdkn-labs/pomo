@@ -188,3 +188,98 @@ fn stats_streak_and_days() {
     let st = s.stats(Range::ALL, -60, 2 * day + 800_000).unwrap();
     assert!(st.focus_ms_by_day.contains_key("1969-12-31"));
 }
+
+#[test]
+fn error_variants_are_typed() {
+    let mut s = Store::open_in_memory("me").unwrap();
+    let cmd = |body| Command { body, command_key: None };
+    assert!(matches!(s.apply(cmd(CommandBody::Pause), Source::User, 1), Err(Error::InvalidState(_))));
+    let bad = CommandBody::Start { kind: Kind::Focus, planned_ms: 0, label: None, project: None };
+    assert!(matches!(s.apply(cmd(bad), Source::User, 1), Err(Error::InvalidArgument(_))));
+    assert!(matches!(s.apply(cmd(CommandBody::Extend { add_ms: -5 }), Source::User, 1), Err(Error::InvalidArgument(_))));
+    let start = CommandBody::Start { kind: Kind::Focus, planned_ms: 1000, label: None, project: None };
+    s.apply(cmd(start), Source::User, 2).unwrap();
+    let unknown = CommandBody::Label { block_id: Some("nope".into()), label: Some("x".into()), project: None };
+    assert!(matches!(s.apply(cmd(unknown), Source::User, 3), Err(Error::NotFound(_))));
+}
+
+#[test]
+fn ingest_atomic_rejects_whole_call_on_conflict() {
+    let mut s = Store::open_in_memory("me").unwrap();
+    let started = |id, dev: &str, seq| ev(id, dev, seq, 1000 + id as i64, 0, "timer.started", json!({"block_id": format!("b{id}"), "kind":"focus", "planned_ms": 1000}));
+    s.ingest(&[started(1, "peer", 1)]).unwrap();
+    let before = s.events().unwrap();
+    let blocks_before = s.projected_blocks(Range::ALL).unwrap();
+    // (peer, 1) is stored under another id; the clean events around it must not be stored either.
+    let frame = [started(2, "peer", 2), started(3, "peer", 1), started(4, "other", 1)];
+    assert!(matches!(s.ingest_atomic(&frame), Err(Error::Conflict(_))));
+    assert_eq!(s.events().unwrap(), before);
+    assert_eq!(s.projected_blocks(Range::ALL).unwrap(), blocks_before);
+    // A conflict between two events of the same call is also caught.
+    assert!(matches!(s.ingest_atomic(&[started(5, "x", 1), started(6, "x", 1)]), Err(Error::Conflict(_))));
+    assert_eq!(s.events().unwrap(), before);
+    // The lenient variant stores the clean rest and reports the conflict.
+    let r = s.ingest(&frame).unwrap();
+    assert_eq!((r.inserted, r.conflicts.len()), (2, 1));
+    // A clean call through the atomic variant works and is idempotent.
+    let clean = [started(7, "peer", 3)];
+    assert_eq!(s.ingest_atomic(&clean).unwrap().inserted, 1);
+    assert_eq!(s.ingest_atomic(&clean).unwrap().duplicates, 1);
+}
+
+#[test]
+fn devices_and_peer_addresses() {
+    let mut s = Store::open_in_memory("me").unwrap();
+    assert_eq!(s.device("peer").unwrap(), None);
+    s.upsert_device("peer", "phone").unwrap();
+    let d = s.device("peer").unwrap().unwrap();
+    assert_eq!((d.name.as_deref(), d.paired, d.revoked), (Some("phone"), false, false));
+    s.set_device_paired("peer", true).unwrap();
+    s.upsert_device("peer", "phone 2").unwrap(); // renaming keeps trust
+    s.set_device_revoked("peer", true).unwrap();
+    let d = s.device("peer").unwrap().unwrap();
+    assert_eq!((d.name.as_deref(), d.paired, d.revoked), (Some("phone 2"), true, true));
+    s.set_device_revoked("peer", false).unwrap();
+    assert!(!s.device("peer").unwrap().unwrap().revoked);
+    // Unknown ids are recorded, e.g. to revoke before any event was seen.
+    s.set_device_revoked("ghost", true).unwrap();
+    assert!(s.device("ghost").unwrap().unwrap().revoked);
+    let ids: Vec<String> = s.devices().unwrap().into_iter().map(|d| d.device_id).collect();
+    assert_eq!(ids, ["ghost", "me", "peer"]);
+    assert!(matches!(s.upsert_device("", "x"), Err(Error::InvalidArgument(_))));
+
+    assert_eq!(s.peer_address("peer").unwrap(), None);
+    s.set_peer_address("peer", "addr-1", 10).unwrap();
+    s.set_peer_address("peer", "addr-2", 20).unwrap();
+    assert_eq!(s.peer_address("peer").unwrap().as_deref(), Some("addr-2"));
+}
+
+#[test]
+fn peers_and_trust_survive_reopen_and_v1_stores_migrate() {
+    let dir = std::env::temp_dir().join(format!("pomo-core-migrate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pomo.db");
+    let _ = std::fs::remove_file(&path);
+    {
+        let mut s = Store::open(&path, "me").unwrap();
+        s.set_device_paired("peer", true).unwrap();
+        s.set_peer_address("peer", "addr", 1).unwrap();
+    }
+    let s = Store::open(&path, "me").unwrap();
+    assert!(s.device("peer").unwrap().unwrap().paired);
+    assert_eq!(s.peer_address("peer").unwrap().as_deref(), Some("addr"));
+    drop(s);
+
+    // A store created by schema version 1 (no `peers` table) gains it on open.
+    let old = dir.join("old.db");
+    let _ = std::fs::remove_file(&old);
+    {
+        let c = rusqlite::Connection::open(&old).unwrap();
+        c.execute_batch(include_str!("../../spec/migrations/0001_init.sql")).unwrap();
+        c.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1'), ('device_id', 'me')", []).unwrap();
+    }
+    let mut s = Store::open(&old, "me").unwrap();
+    s.set_peer_address("peer", "addr", 1).unwrap();
+    assert_eq!(s.peer_address("peer").unwrap().as_deref(), Some("addr"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

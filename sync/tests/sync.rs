@@ -67,7 +67,7 @@ fn rejected(r: Result<impl std::fmt::Debug, Error>) -> String {
 async fn c_pairing_happy_path() {
     let (a, b) = (node().await, node().await);
     let ev = start(&a, T0);
-    let ticket = a.pairing_ticket("laptop").await.unwrap();
+    let ticket = a.pairing_ticket("laptop").await.unwrap().ticket;
     assert!(ticket.starts_with("pomo-pair:"));
     let out = b.pair(&ticket, "phone").await.unwrap();
     assert_eq!((out.device_id.as_str(), out.name.as_str()), (a.device_id(), "laptop"));
@@ -83,7 +83,7 @@ async fn c_pairing_happy_path() {
 #[tokio::test]
 async fn c_pairing_wrong_secret_expired_and_reused() {
     let (a, b, c) = (node().await, node().await, node().await);
-    let ticket = a.pairing_ticket("a").await.unwrap();
+    let ticket = a.pairing_ticket("a").await.unwrap().ticket;
     assert_eq!(rejected(b.pair(&tamper_secret(&ticket), "b").await), "bad_secret");
     assert!(!a.is_paired(b.device_id()).unwrap() && !b.is_paired(a.device_id()).unwrap());
     // A wrong guess does not burn the real ticket.
@@ -92,7 +92,7 @@ async fn c_pairing_wrong_secret_expired_and_reused() {
     assert!(!a.is_paired(c.device_id()).unwrap());
 
     let short = node_with(SyncOptions { ticket_ttl: Duration::from_millis(150), ..SyncOptions::local() }).await;
-    let ticket = short.pairing_ticket("s").await.unwrap();
+    let ticket = short.pairing_ticket("s").await.unwrap().ticket;
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(rejected(c.pair(&ticket, "c").await), "expired");
     assert!(!short.is_paired(c.device_id()).unwrap());
@@ -116,7 +116,7 @@ async fn d_unpaired_and_revoked_are_rejected() {
     assert_eq!(count(&a), 0);
     assert!(!ids(&a).contains(&ev.id));
     // Re-pairing is an explicit act and lifts the revocation.
-    let ticket = a.pairing_ticket("a").await.unwrap();
+    let ticket = a.pairing_ticket("a").await.unwrap().ticket;
     b.pair(&ticket, "b").await.unwrap();
     assert_eq!(count(&a), 1);
 }
@@ -189,7 +189,7 @@ async fn g_seq_conflict_aborts_and_stores_nothing_from_the_frame() {
     let addr = EndpointTicket::from_str(&a.endpoint_ticket().await).unwrap().endpoint_addr().clone();
     let conn = raw.connect(addr, ALPN).await.unwrap();
     let (mut send, mut recv) = conn.open_bi().await.unwrap();
-    write_frame(&mut send, &Frame::Hello { device_id: raw_id.clone(), vv: Default::default() }).await.unwrap();
+    write_frame(&mut send, &Frame::Hello { device_id: raw_id.clone(), vv: Default::default(), live: false }).await.unwrap();
     assert!(matches!(read_frame(&mut recv).await.unwrap(), Frame::Hello { .. }));
     let mk = |dev: &str, seq: u64, id: &str| Event {
         id: id.into(),
@@ -231,7 +231,7 @@ async fn g_seq_conflict_aborts_and_stores_nothing_from_the_frame() {
         .await
         .unwrap();
     let (mut send, mut recv) = conn.open_bi().await.unwrap();
-    write_frame(&mut send, &Frame::Hello { device_id: raw_id.clone(), vv: Default::default() }).await.unwrap();
+    write_frame(&mut send, &Frame::Hello { device_id: raw_id.clone(), vv: Default::default(), live: false }).await.unwrap();
     assert!(matches!(read_frame(&mut recv).await.unwrap(), Frame::Hello { .. }));
     write_frame(&mut send, &Frame::Events { events: vec![good.clone()] }).await.unwrap();
     write_frame(&mut send, &Frame::Done).await.unwrap();
@@ -243,7 +243,7 @@ async fn g_seq_conflict_aborts_and_stores_nothing_from_the_frame() {
 async fn n0_relay_pairing_and_sync() {
     let (a, b) = (node_with(SyncOptions::default()).await, node_with(SyncOptions::default()).await);
     let ev = start(&a, T0);
-    let ticket = a.pairing_ticket("a").await.unwrap();
+    let ticket = a.pairing_ticket("a").await.unwrap().ticket;
     let out = b.pair(&ticket, "b").await.unwrap();
     assert_eq!(out.sync.received, 1);
     let ev2 = start(&b, T0 + 1);
@@ -265,4 +265,65 @@ async fn key_file_is_private_and_device_id_survives_restart() {
     assert_eq!(mode & 0o777, 0o600);
     let second = pomo_sync::SyncNode::open(&db, SyncOptions::local()).await.unwrap();
     assert_eq!(second.device_id(), id);
+}
+
+#[tokio::test]
+async fn h_stream_stays_open_when_either_side_is_live() {
+    // Live listener, non-live dialer.
+    let (a, b) = (node().await, node().await);
+    trust(&a, &b);
+    b.set_live(true);
+    let report = a.sync_with(&b.endpoint_ticket().await).await.unwrap();
+    assert!(report.live, "the peer asked for the stream");
+    let ev = start(&b, T0);
+    eventually("B's event on A", Duration::from_secs(2), || ids(&a).contains(&ev.id)).await;
+    let ev2 = start(&a, T0 + 1);
+    eventually("A's event on B", Duration::from_secs(2), || ids(&b).contains(&ev2.id)).await;
+    assert!(a.has_session(b.device_id()));
+    // The side that was live stops: it says bye and the other side ends too.
+    b.set_live(false);
+    eventually("session closed on A", Duration::from_secs(3), || !a.has_session(b.device_id())).await;
+
+    // Live dialer, non-live listener.
+    let (c, d) = (node().await, node().await);
+    trust(&c, &d);
+    c.set_live(true);
+    assert!(c.sync_with(&d.endpoint_ticket().await).await.unwrap().live);
+    let ev3 = start(&c, T0 + 2);
+    eventually("C's event on D", Duration::from_secs(2), || ids(&d).contains(&ev3.id)).await;
+    let ev4 = start(&d, T0 + 3);
+    eventually("D's event on C", Duration::from_secs(2), || ids(&c).contains(&ev4.id)).await;
+    assert_consistent(&d);
+
+    // Neither side live: the plain exchange ends.
+    let (e, f) = (node().await, node().await);
+    trust(&e, &f);
+    assert!(!e.sync_with(&f.endpoint_ticket().await).await.unwrap().live);
+    assert!(!e.has_session(f.device_id()));
+}
+
+#[tokio::test]
+async fn i_peer_address_survives_a_restart() {
+    let a = node().await;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("pomo.db");
+    let b = pomo_sync::SyncNode::open(&db, SyncOptions::local()).await.unwrap();
+    let ticket = a.pairing_ticket("a").await.unwrap().ticket;
+    let out = b.pair(&ticket, "b").await.unwrap();
+    assert_eq!(out.name, "a");
+    let b_id = b.device_id().to_string();
+    b.shutdown().await;
+    drop(b);
+
+    let ev = start(&a, T0);
+    let b = pomo_sync::SyncNode::open(&db, SyncOptions::local()).await.unwrap();
+    assert_eq!(b.device_id(), b_id);
+    assert!(b.knows_address(a.device_id()));
+    let r = b.sync_with(a.device_id()).await.unwrap();
+    assert_eq!(r.received, 1);
+    assert!(b.store().lock().unwrap().events().unwrap().iter().any(|e| e.id == ev.id));
+    // An unrelated device has no address and is not paired.
+    let stranger = SecretKey::generate().public().to_string();
+    assert!(!b.knows_address(&stranger));
+    assert!(matches!(b.sync_with(&stranger).await, Err(Error::NotPaired(_))));
 }

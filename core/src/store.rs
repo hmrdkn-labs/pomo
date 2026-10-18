@@ -9,6 +9,7 @@ use crate::stats;
 use crate::types::*;
 
 const MIGRATION_0001: &str = include_str!("../../spec/migrations/0001_init.sql");
+const MIGRATION_0002: &str = include_str!("../../spec/migrations/0002_peers.sql");
 
 /// Owned form of [`EventKey`].
 type OwnedKey = (i64, u32, String, u64);
@@ -117,6 +118,17 @@ fn load_events(conn: &Connection) -> Result<Vec<Event>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+fn row_to_device(r: &Row<'_>) -> rusqlite::Result<Device> {
+    Ok(Device { device_id: r.get(0)?, name: r.get(1)?, paired: r.get(2)?, revoked: r.get(3)? })
+}
+
+fn check_device_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        return Err(Error::InvalidArgument("empty device_id".into()));
+    }
+    Ok(())
+}
+
 fn check_event(e: &Event) -> Option<&'static str> {
     if e.id.is_empty() {
         Some("empty id")
@@ -154,7 +166,7 @@ impl Store {
 
     fn init(conn: Connection, device_id: &str, config: Config) -> Result<Store> {
         if device_id.is_empty() {
-            return Err(Error::Invalid("empty device_id".into()));
+            return Err(Error::InvalidArgument("empty device_id".into()));
         }
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         let has_meta: bool = conn.query_row(
@@ -174,6 +186,13 @@ impl Store {
             if stored != device_id {
                 return Err(Error::DeviceMismatch { stored, requested: device_id.to_string() });
             }
+        }
+        let version: i64 = conn
+            .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get::<_, String>(0))?
+            .parse()
+            .unwrap_or(0);
+        if version < 2 {
+            conn.execute_batch(&format!("BEGIN;\n{MIGRATION_0002}\nCOMMIT;"))?;
         }
         conn.execute("INSERT OR IGNORE INTO devices (device_id) VALUES (?1)", [device_id])?;
         let mut s = Store {
@@ -209,19 +228,35 @@ impl Store {
     }
 
     /// Stores new events, idempotent by `id`. `(device_id, seq)` / `(device_id, command_key)`
-    /// collisions with a different id are rejected and not stored. Updates the projection.
+    /// collisions with a different id are rejected into the report and not stored; the rest of
+    /// the call is stored. Updates the projection.
     pub fn ingest(&mut self, events: &[Event]) -> Result<IngestReport> {
-        match self.ingest_inner(events) {
+        self.ingest_with(events, false)
+    }
+
+    /// Like [`Store::ingest`], but all-or-nothing on conflicts: when any event collides with a
+    /// stored one under a different id (or with another event of the same call), returns
+    /// [`Error::Conflict`] and stores nothing. Structurally invalid events are still skipped
+    /// and listed in the report.
+    pub fn ingest_atomic(&mut self, events: &[Event]) -> Result<IngestReport> {
+        self.ingest_with(events, true)
+    }
+
+    fn ingest_with(&mut self, events: &[Event], atomic: bool) -> Result<IngestReport> {
+        match self.ingest_inner(events, atomic) {
             Ok(r) => Ok(r),
             Err(e) => {
-                // Cached state may be ahead of the rolled-back transaction.
-                let _ = self.rebuild_projections();
+                // A conflict returns before the cached state changes; anything else may
+                // leave it ahead of the rolled-back transaction.
+                if !matches!(e, Error::Conflict(_)) {
+                    let _ = self.rebuild_projections();
+                }
                 Err(e)
             }
         }
     }
 
-    fn ingest_inner(&mut self, events: &[Event]) -> Result<IngestReport> {
+    fn ingest_inner(&mut self, events: &[Event], atomic: bool) -> Result<IngestReport> {
         let tx = self.conn.transaction()?;
         let mut report = IngestReport::default();
         let mut fresh: Vec<&Event> = Vec::new();
@@ -242,10 +277,11 @@ impl Store {
                 |r| r.get(0),
             )?;
             if seq_taken {
-                report.conflicts.push(Rejected {
-                    id: e.id.clone(),
-                    reason: format!("({}, {}) already stored with a different id", e.device_id, e.seq),
-                });
+                let reason = format!("({}, {}) already stored with a different id", e.device_id, e.seq);
+                if atomic {
+                    return Err(Error::Conflict(reason));
+                }
+                report.conflicts.push(Rejected { id: e.id.clone(), reason });
                 continue;
             }
             if let Some(k) = &e.command_key {
@@ -255,10 +291,11 @@ impl Store {
                     |r| r.get(0),
                 )?;
                 if key_taken {
-                    report.conflicts.push(Rejected {
-                        id: e.id.clone(),
-                        reason: format!("command_key {k:?} of {} already used by another event", e.device_id),
-                    });
+                    let reason = format!("command_key {k:?} of {} already used by another event", e.device_id);
+                    if atomic {
+                        return Err(Error::Conflict(reason));
+                    }
+                    report.conflicts.push(Rejected { id: e.id.clone(), reason });
                     continue;
                 }
             }
@@ -343,38 +380,38 @@ impl Store {
         let payload = match cmd.body {
             CommandBody::Start { kind, planned_ms, label, project } => {
                 if planned_ms <= 0 {
-                    return Err(Error::Invalid("planned_ms must be > 0".into()));
+                    return Err(Error::InvalidArgument("planned_ms must be > 0".into()));
                 }
                 Payload::Started { block_id: new_uuid(), kind, planned_ms, label, project }
             }
             CommandBody::Pause => match (timer.status, live) {
                 (TimerStatus::Running, Some(block_id)) => Payload::Paused { block_id },
-                _ => return Err(Error::Invalid("no running block to pause".into())),
+                _ => return Err(Error::InvalidState("no running block to pause".into())),
             },
             CommandBody::Resume => match (timer.status, live) {
                 (TimerStatus::Paused, Some(block_id)) => Payload::Resumed { block_id },
-                _ => return Err(Error::Invalid("no paused block to resume".into())),
+                _ => return Err(Error::InvalidState("no paused block to resume".into())),
             },
             CommandBody::Extend { add_ms } => {
                 if add_ms <= 0 {
-                    return Err(Error::Invalid("add_ms must be > 0".into()));
+                    return Err(Error::InvalidArgument("add_ms must be > 0".into()));
                 }
                 match live {
                     Some(block_id) => Payload::Extended { block_id, add_ms },
-                    None => return Err(Error::Invalid("no live block to extend".into())),
+                    None => return Err(Error::InvalidState("no live block to extend".into())),
                 }
             }
             CommandBody::Skip => match live {
                 Some(block_id) => Payload::Skipped { block_id },
-                None => return Err(Error::Invalid("no live block to skip".into())),
+                None => return Err(Error::InvalidState("no live block to skip".into())),
             },
             CommandBody::Stop => match live {
                 Some(block_id) => Payload::Stopped { block_id },
-                None => return Err(Error::Invalid("no live block to stop".into())),
+                None => return Err(Error::InvalidState("no live block to stop".into())),
             },
             CommandBody::Reset => match live {
                 Some(block_id) => Payload::Reset { block_id },
-                None => return Err(Error::Invalid("no live block to reset".into())),
+                None => return Err(Error::InvalidState("no live block to reset".into())),
             },
             CommandBody::Label { block_id, label, project } => {
                 let target = match block_id.or(live) {
@@ -382,10 +419,10 @@ impl Store {
                     None => blocks
                         .last()
                         .map(|b| b.id.clone())
-                        .ok_or_else(|| Error::Invalid("no block to label".into()))?,
+                        .ok_or_else(|| Error::InvalidState("no block to label".into()))?,
                 };
                 if !blocks.iter().any(|b| b.id == target) {
-                    return Err(Error::Invalid(format!("unknown block {target}")));
+                    return Err(Error::NotFound(format!("unknown block {target}")));
                 }
                 Payload::Labeled { block_id: target, label: Some(label), project }
             }
@@ -409,9 +446,81 @@ impl Store {
         };
         let report = self.ingest(std::slice::from_ref(&ev))?;
         if report.inserted != 1 {
-            return Err(Error::Invalid(format!("event rejected: {report:?}")));
+            return Err(Error::Conflict(format!("event rejected: {report:?}")));
         }
         Ok(ev)
+    }
+
+    /// The Device `device_id`, if known.
+    pub fn device(&self, device_id: &str) -> Result<Option<Device>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT device_id, name, paired, revoked FROM devices WHERE device_id = ?1",
+                [device_id],
+                row_to_device,
+            )
+            .optional()?)
+    }
+
+    /// Every known Device, own included, ordered by `device_id`.
+    pub fn devices(&self) -> Result<Vec<Device>> {
+        let mut st = self.conn.prepare("SELECT device_id, name, paired, revoked FROM devices ORDER BY device_id")?;
+        let rows = st.query_map([], row_to_device)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Records `device_id` (when new) and sets its name. Trust flags are untouched.
+    pub fn upsert_device(&mut self, device_id: &str, name: &str) -> Result<()> {
+        check_device_id(device_id)?;
+        self.conn.execute(
+            "INSERT INTO devices (device_id, name) VALUES (?1, ?2)
+             ON CONFLICT (device_id) DO UPDATE SET name = ?2",
+            params![device_id, name],
+        )?;
+        Ok(())
+    }
+
+    /// Sets the local `paired` flag, recording the Device when new. Independent of `revoked`.
+    pub fn set_device_paired(&mut self, device_id: &str, paired: bool) -> Result<()> {
+        check_device_id(device_id)?;
+        self.conn.execute(
+            "INSERT INTO devices (device_id, paired) VALUES (?1, ?2)
+             ON CONFLICT (device_id) DO UPDATE SET paired = ?2",
+            params![device_id, paired],
+        )?;
+        Ok(())
+    }
+
+    /// Sets the local `revoked` flag, recording the Device when new. Independent of `paired`.
+    pub fn set_device_revoked(&mut self, device_id: &str, revoked: bool) -> Result<()> {
+        check_device_id(device_id)?;
+        self.conn.execute(
+            "INSERT INTO devices (device_id, revoked) VALUES (?1, ?2)
+             ON CONFLICT (device_id) DO UPDATE SET revoked = ?2",
+            params![device_id, revoked],
+        )?;
+        Ok(())
+    }
+
+    /// Last known address (an opaque string, e.g. an iroh endpoint ticket) of a peer Device.
+    /// Local only: stored in `peers`, never synced.
+    pub fn peer_address(&self, device_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT address FROM peers WHERE device_id = ?1", [device_id], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Remembers `address` as the last known address of `device_id`.
+    pub fn set_peer_address(&mut self, device_id: &str, address: &str, now_ms: i64) -> Result<()> {
+        check_device_id(device_id)?;
+        self.conn.execute(
+            "INSERT INTO peers (device_id, address, updated_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT (device_id) DO UPDATE SET address = ?2, updated_ms = ?3",
+            params![device_id, address, now_ms],
+        )?;
+        Ok(())
     }
 
     /// Per-device max `seq`.

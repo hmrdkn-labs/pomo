@@ -4,11 +4,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
-use axum::extract::{Query, Request, State};
+use axum::extract::{Path as UrlPath, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{self, KeepAlive, Sse};
@@ -16,17 +17,18 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
+use futures_util::{Stream, StreamExt};
 use pomo_core::{
-    sort_events, Block, Command, CommandBody, Error as CoreError, Kind, Outcome, Phase, Range,
-    Source, Store, TimerStatus, VersionVector,
+    sort_events, Block, Command, Device, Error as CoreError, Event, Kind, Outcome, Phase, Range, Source, Store,
+    TimerStatus, VersionVector,
 };
+use pomo_sync::{Error as SyncError, Network, SyncNode, SyncOptions};
 use rand::RngCore;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
-use futures_util::{Stream, StreamExt};
 
 pub const DEFAULT_PORT: u16 = 47831;
 const DAY_MS: i64 = 86_400_000;
@@ -40,10 +42,52 @@ pub fn default_home() -> PathBuf {
     home.join(".pomo")
 }
 
+/// How the Daemon takes part in Sync (`--sync`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncMode {
+    /// Real relays and address lookup.
+    N0,
+    /// Loopback only, no relays. For tests.
+    Local,
+    /// No sync node; the sync endpoints answer `501 sync_disabled`.
+    Off,
+}
+
+impl FromStr for SyncMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "n0" => Ok(SyncMode::N0),
+            "local" => Ok(SyncMode::Local),
+            "off" => Ok(SyncMode::Off),
+            other => Err(format!("unknown sync mode {other:?}: use n0, local or off")),
+        }
+    }
+}
+
 pub struct Options {
     pub home: PathBuf,
     /// 0 picks a free port.
     pub port: u16,
+    pub sync: SyncMode,
+    /// This Device's name. Default: the stored name, else the machine's hostname.
+    pub name: Option<String>,
+    /// Period of the background sync with paired Devices (one round also runs at startup).
+    /// `None` disables it. Never runs with [`SyncMode::Off`].
+    pub sync_interval: Option<Duration>,
+}
+
+impl Options {
+    /// Defaults for the `pomod` binary: port 47831, real relays, background sync every 60 s.
+    pub fn new(home: PathBuf) -> Options {
+        Options {
+            home,
+            port: DEFAULT_PORT,
+            sync: SyncMode::N0,
+            name: None,
+            sync_interval: Some(Duration::from_secs(60)),
+        }
+    }
 }
 
 /// A running daemon. Dropping it without [`Daemon::shutdown`] leaves `daemon.json` behind.
@@ -51,17 +95,53 @@ pub struct Daemon {
     pub addr: SocketAddr,
     pub token: String,
     pub home: PathBuf,
+    /// This Device's id: the iroh endpoint id.
+    pub device_id: String,
     shutdown: watch::Sender<bool>,
     task: JoinHandle<std::io::Result<()>>,
+}
+
+fn io_err(e: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(e.to_string())
+}
+
+fn machine_name() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "pomo".to_string())
 }
 
 impl Daemon {
     pub async fn start(opts: Options) -> std::io::Result<Daemon> {
         std::fs::create_dir_all(&opts.home)?;
         let token = load_or_create_token(&opts.home)?;
-        let device_id = load_or_create_device_id(&opts.home)?;
-        let store = Store::open(opts.home.join("pomo.db"), &device_id)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let (mut store, key) =
+            pomo_sync::open_store(&opts.home.join("pomo.db"), &opts.home.join("meta").join("key")).map_err(io_err)?;
+        let device_id = store.device_id().to_string();
+        let name = match opts.name.clone() {
+            Some(n) => n,
+            None => store
+                .device(&device_id)
+                .map_err(io_err)?
+                .and_then(|d| d.name)
+                .unwrap_or_else(machine_name),
+        };
+        store.upsert_device(&device_id, &name).map_err(io_err)?;
+        let store = Arc::new(Mutex::new(store));
+
+        let node = match opts.sync {
+            SyncMode::Off => None,
+            mode => {
+                let network = if mode == SyncMode::Local { Network::Local } else { Network::N0 };
+                let sync_opts = SyncOptions { network, live: true, ..SyncOptions::default() };
+                Some(SyncNode::start(store.clone(), key, sync_opts).await.map_err(io_err)?)
+            }
+        };
 
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
         let addr = listener.local_addr()?;
@@ -69,7 +149,10 @@ impl Daemon {
         let (tx, _) = broadcast::channel(256);
         let (sd_tx, sd_rx) = watch::channel(false);
         let shared = Arc::new(Shared {
-            store: Mutex::new(store),
+            store,
+            node,
+            device_id: device_id.clone(),
+            name,
             token: token.clone(),
             tx,
             timer_task: Mutex::new(None),
@@ -79,6 +162,13 @@ impl Daemon {
         {
             let store = shared.lock_store();
             shared.reschedule(&store, now_ms());
+        }
+        let mut background = Vec::new();
+        if shared.node.is_some() {
+            background.push(tokio::spawn(publish_ingested(shared.clone())));
+            if let Some(every) = opts.sync_interval {
+                background.push(tokio::spawn(sync_periodically(shared.clone(), every)));
+            }
         }
 
         let app = router(shared.clone());
@@ -92,13 +182,19 @@ impl Daemon {
                     let _ = sd.wait_for(|v| *v).await;
                 })
                 .await;
+            for h in background {
+                h.abort();
+            }
+            if let Some(node) = &shared.node {
+                node.shutdown().await;
+            }
             if let Some(h) = shared.timer_task.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 h.abort();
             }
             let _ = std::fs::remove_file(&daemon_json);
             res
         });
-        Ok(Daemon { addr, token, home: opts.home, shutdown: sd_tx, task })
+        Ok(Daemon { addr, token, home: opts.home, device_id, shutdown: sd_tx, task })
     }
 
     /// Stops serving, ends SSE streams and removes `daemon.json`.
@@ -137,19 +233,6 @@ fn random_hex() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn load_or_create_device_id(home: &Path) -> std::io::Result<String> {
-    let path = home.join("device_id");
-    match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => return Ok(t.trim().to_string()),
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
-    }
-    let id = random_hex();
-    std::fs::write(&path, &id)?;
-    Ok(id)
-}
-
 fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -165,7 +248,11 @@ struct Msg {
 }
 
 struct Shared {
-    store: Mutex<Store>,
+    store: Arc<Mutex<Store>>,
+    /// `None` with `--sync off`.
+    node: Option<SyncNode>,
+    device_id: String,
+    name: String,
     token: String,
     tx: broadcast::Sender<Msg>,
     timer_task: Mutex<Option<JoinHandle<()>>>,
@@ -217,12 +304,32 @@ impl ApiError {
 
 impl From<CoreError> for ApiError {
     fn from(e: CoreError) -> Self {
+        let m = e.to_string();
         match e {
-            CoreError::Invalid(m) if m.starts_with("unknown block") => {
-                ApiError::new(StatusCode::NOT_FOUND, "not_found", m)
+            CoreError::InvalidArgument(_) => ApiError::bad(m),
+            CoreError::InvalidState(_) => ApiError::new(StatusCode::CONFLICT, "invalid_state", m),
+            CoreError::NotFound(_) => ApiError::new(StatusCode::NOT_FOUND, "not_found", m),
+            CoreError::Conflict(_) => ApiError::new(StatusCode::CONFLICT, "conflict", m),
+            CoreError::Db(_) | CoreError::Json(_) | CoreError::DeviceMismatch { .. } => {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", m)
             }
-            CoreError::Invalid(m) => ApiError::new(StatusCode::CONFLICT, "invalid_state", m),
-            other => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", other.to_string()),
+        }
+    }
+}
+
+impl From<SyncError> for ApiError {
+    fn from(e: SyncError) -> Self {
+        let m = e.to_string();
+        match e {
+            SyncError::BadTicket(_) => ApiError::new(StatusCode::BAD_REQUEST, "bad_ticket", m),
+            SyncError::Rejected(reason) => ApiError::new(
+                StatusCode::CONFLICT,
+                "pairing_rejected",
+                format!("the other Device rejected the pairing: {reason}"),
+            ),
+            SyncError::NotPaired(_) => ApiError::new(StatusCode::CONFLICT, "invalid_state", m),
+            SyncError::Store(e) => e.into(),
+            _ => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "sync_failed", m),
         }
     }
 }
@@ -253,6 +360,11 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/stats", get(stats))
         .route("/v1/events", get(events))
         .route("/v1/stream", get(stream))
+        .route("/v1/devices", get(devices))
+        .route("/v1/devices/:device_id/revoke", post(revoke))
+        .route("/v1/pair/offer", post(pair_offer))
+        .route("/v1/pair/join", post(pair_join))
+        .route("/v1/sync", post(sync))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not_found", "no such endpoint") })
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
@@ -372,13 +484,6 @@ async fn commands(State(sh): State<Arc<Shared>>, headers: HeaderMap, body: Bytes
     let source = parse_source(&headers)?;
     let mut cmd: Command =
         serde_json::from_slice(&body).map_err(|e| ApiError::bad(format!("invalid command: {e}")))?;
-    match &cmd.body {
-        CommandBody::Start { planned_ms, .. } if *planned_ms <= 0 => {
-            return Err(ApiError::bad("planned_ms must be > 0"))
-        }
-        CommandBody::Extend { add_ms } if *add_ms <= 0 => return Err(ApiError::bad("add_ms must be > 0")),
-        _ => {}
-    }
     let key = match headers.get("idempotency-key") {
         Some(v) => v.to_str().map_err(|_| ApiError::bad("invalid Idempotency-Key"))?.to_string(),
         None => cmd.command_key.take().unwrap_or_else(random_hex),
@@ -396,6 +501,9 @@ async fn commands(State(sh): State<Arc<Shared>>, headers: HeaderMap, body: Bytes
         let event_json = serde_json::to_value(&event).map_err(CoreError::from)?;
         if !replayed {
             let _ = sh.tx.send(Msg { name: "pomo.event", data: event_json.to_string() });
+            if let Some(node) = &sh.node {
+                node.notify();
+            }
         }
         sh.reschedule(&store, now);
         Ok(Json(json!({"event": event_json, "timer": timer_json(&store, now)?, "replayed": replayed})))
@@ -526,4 +634,169 @@ async fn stream(State(sh): State<Arc<Shared>>) -> Sse<impl Stream<Item = Result<
             let _ = sd.wait_for(|v| *v).await;
         }));
     Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive"))
+}
+
+// ---------- sync ----------
+
+fn sync_node(sh: &Shared) -> Result<&SyncNode, ApiError> {
+    sh.node.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "sync_disabled",
+            "sync is off: start pomod with --sync n0 or --sync local",
+        )
+    })
+}
+
+fn device_json(d: &Device) -> Value {
+    json!({"device_id": d.device_id, "name": d.name, "paired": d.paired, "revoked": d.revoked})
+}
+
+/// Publishes events ingested from peers on `/v1/stream` and re-arms the block-end timer, which
+/// a synced event can change.
+async fn publish_ingested(sh: Arc<Shared>) {
+    let Some(node) = &sh.node else { return };
+    let mut rx = node.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(events) => {
+                for e in &events {
+                    if let Ok(data) = serde_json::to_string::<Event>(e) {
+                        let _ = sh.tx.send(Msg { name: "pomo.event", data });
+                    }
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Closed) => return,
+        }
+        let sh = sh.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let store = sh.lock_store();
+            sh.reschedule(&store, now_ms());
+        })
+        .await;
+    }
+}
+
+/// Paired, non-revoked Devices that can be dialed; with `skip_connected` not those that already
+/// have an open session.
+fn peer_ids(sh: &Shared, node: &SyncNode, skip_connected: bool) -> Result<Vec<String>, ApiError> {
+    let devices = sh.lock_store().devices()?;
+    Ok(devices
+        .into_iter()
+        .filter(|d| d.paired && !d.revoked && d.device_id != sh.device_id)
+        .map(|d| d.device_id)
+        .filter(|id| node.knows_address(id) && !(skip_connected && node.has_session(id)))
+        .collect())
+}
+
+async fn sync_peers(node: &SyncNode, ids: Vec<String>) -> Vec<Value> {
+    let runs = ids.into_iter().map(|id| async move {
+        match node.sync_with(&id).await {
+            Ok(r) => json!({"device_id": id, "sent": r.sent, "received": r.received}),
+            Err(e) => json!({"device_id": id, "error": e.to_string()}),
+        }
+    });
+    futures_util::future::join_all(runs).await
+}
+
+async fn sync_periodically(sh: Arc<Shared>, every: Duration) {
+    let Some(node) = &sh.node else { return };
+    let mut tick = tokio::time::interval(every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        let ids = blocking(&sh, |sh| peer_ids(sh, sh.node.as_ref().expect("node present"), true)).await;
+        if let Ok(ids) = ids {
+            sync_peers(node, ids).await;
+        }
+    }
+}
+
+async fn devices(State(sh): State<Arc<Shared>>) -> ApiResult {
+    sync_node(&sh)?;
+    blocking(&sh, |sh| {
+        let list: Vec<Value> =
+            sh.lock_store().devices()?.iter().filter(|d| d.device_id != sh.device_id).map(device_json).collect();
+        Ok(Json(json!({"device_id": sh.device_id, "name": sh.name, "devices": list})))
+    })
+    .await
+}
+
+async fn pair_offer(State(sh): State<Arc<Shared>>, _body: Bytes) -> ApiResult {
+    let t = sync_node(&sh)?.pairing_ticket(&sh.name).await?;
+    Ok(Json(json!({"ticket": t.ticket, "expires_ms": t.expires_ms})))
+}
+
+async fn pair_join(State(sh): State<Arc<Shared>>, body: Bytes) -> ApiResult {
+    let node = sync_node(&sh)?;
+    let body: Value =
+        serde_json::from_slice(&body).map_err(|e| ApiError::bad(format!("body must be JSON: {e}")))?;
+    let ticket = body["ticket"].as_str().ok_or_else(|| ApiError::bad("ticket is required"))?;
+    let name = match &body["name"] {
+        Value::Null => sh.name.clone(),
+        Value::String(n) if !n.is_empty() => n.clone(),
+        _ => return Err(ApiError::bad("name must be a non-empty string")),
+    };
+    let out = node.pair(ticket, &name).await?;
+    blocking(&sh, move |sh| {
+        let device = sh
+            .lock_store()
+            .device(&out.device_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("unknown device {}", out.device_id)))?;
+        Ok(Json(json!({"device": device_json(&device)})))
+    })
+    .await
+}
+
+async fn sync(State(sh): State<Arc<Shared>>, body: Bytes) -> ApiResult {
+    let node = sync_node(&sh)?;
+    let body: Value = if body.iter().all(u8::is_ascii_whitespace) {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body).map_err(|e| ApiError::bad(format!("body must be JSON: {e}")))?
+    };
+    let ids = match &body["device_id"] {
+        Value::Null => blocking(&sh, |sh| peer_ids(sh, sh.node.as_ref().expect("node present"), false)).await?,
+        Value::String(id) => {
+            let id = id.clone();
+            blocking(&sh, move |sh| {
+                let d = sh
+                    .lock_store()
+                    .device(&id)?
+                    .ok_or_else(|| CoreError::NotFound(format!("unknown device {id}")))?;
+                if !d.paired || d.revoked {
+                    return Err(CoreError::InvalidState(format!("device {id} is not paired or was revoked")).into());
+                }
+                Ok(vec![id])
+            })
+            .await?
+        }
+        _ => return Err(ApiError::bad("device_id must be a string")),
+    };
+    // A requested Device without a known address is reported, not dialed into a long timeout.
+    let (dialable, unknown): (Vec<String>, Vec<String>) = ids.into_iter().partition(|id| node.knows_address(id));
+    let mut synced = sync_peers(node, dialable).await;
+    synced.extend(unknown.into_iter().map(|id| json!({"device_id": id, "error": "no known address for this Device"})));
+    Ok(Json(json!({"synced": synced})))
+}
+
+async fn revoke(State(sh): State<Arc<Shared>>, UrlPath(device_id): UrlPath<String>, _body: Bytes) -> ApiResult {
+    sync_node(&sh)?;
+    if device_id == sh.device_id {
+        return Err(ApiError::bad("cannot revoke this Device itself"));
+    }
+    blocking(&sh, move |sh| {
+        let node = sh.node.as_ref().expect("node present");
+        if sh.lock_store().device(&device_id)?.is_none() {
+            return Err(CoreError::NotFound(format!("unknown device {device_id}")).into());
+        }
+        node.revoke(&device_id)?;
+        let device = sh
+            .lock_store()
+            .device(&device_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("unknown device {device_id}")))?;
+        Ok(Json(json!({"device": device_json(&device)})))
+    })
+    .await
 }

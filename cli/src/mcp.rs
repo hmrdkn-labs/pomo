@@ -95,6 +95,11 @@ pub fn tools() -> Vec<Value> {
                 &[],
             ),
         ),
+        tool(
+            "get_devices",
+            "List this Device (id and name) and the other Devices it has paired with or seen, each with its `paired` and `revoked` state. Read-only; pairing, syncing and revoking are not available to agents.",
+            schema(json!({}), &[]),
+        ),
     ]
 }
 
@@ -180,6 +185,7 @@ fn plan(name: &str, args: &Value) -> Result<Call, String> {
             }
             Ok(Call::Get("/v1/stats", ops::stats_query(str_arg(args, "since")?, g)?))
         }
+        "get_devices" => Ok(Call::Get("/v1/devices", vec![])),
         other => Err(format!("unknown tool {other:?}")),
     }
 }

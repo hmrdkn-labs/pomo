@@ -17,7 +17,13 @@ pub enum Frame {
     Pair { secret: String, device_id: String, name: String },
     PairOk { device_id: String, name: String },
     Reject { reason: String },
-    Hello { device_id: String, vv: VersionVector },
+    Hello {
+        device_id: String,
+        vv: VersionVector,
+        /// The sender keeps the stream open (Daemon or foreground app). Absent means false.
+        #[serde(default)]
+        live: bool,
+    },
     Events { events: Vec<Event> },
     Done,
     Ping,

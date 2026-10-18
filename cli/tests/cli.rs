@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-use pomod::{Daemon, Options};
+use pomod::{Daemon, Options, SyncMode};
 use serde_json::{json, Value};
 
 struct Env {
@@ -12,10 +12,25 @@ struct Env {
 
 impl Env {
     fn new() -> Env {
+        Env::with(SyncMode::Off, "test")
+    }
+
+    fn with(sync: SyncMode, name: &str) -> Env {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let daemon = rt.block_on(Daemon::start(Options { home: tmp.path().to_path_buf(), port: 0 })).unwrap();
+        let opts = Options {
+            port: 0,
+            sync,
+            name: Some(name.to_string()),
+            sync_interval: None,
+            ..Options::new(tmp.path().to_path_buf())
+        };
+        let daemon = rt.block_on(Daemon::start(opts)).unwrap();
         Env { rt, daemon: Some(daemon), tmp }
+    }
+
+    fn device_id(&self) -> String {
+        self.daemon.as_ref().unwrap().device_id.clone()
     }
 
     fn pomo(&self, args: &[&str]) -> (i32, String, String) {
@@ -214,7 +229,7 @@ fn mcp_stdio_session() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["start_focus", "start_break", "pause", "resume", "stop", "skip", "extend", "reset", "label_block", "get_status", "list_blocks", "get_stats"]
+        ["start_focus", "start_break", "pause", "resume", "stop", "skip", "extend", "reset", "label_block", "get_status", "list_blocks", "get_stats", "get_devices"]
     );
     for t in tools {
         assert!(!t["description"].as_str().unwrap().is_empty());
@@ -262,4 +277,94 @@ fn mcp_source_falls_back_to_agent_mcp() {
     let body: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["event"]["source"], "agent:mcp");
     assert_eq!(body["event"]["payload"]["planned_ms"], 300000);
+}
+
+#[test]
+fn devices_pair_sync_and_revoke_commands() {
+    let a = Env::with(SyncMode::Local, "alpha");
+    let b = Env::with(SyncMode::Local, "beta");
+
+    // Human `pair offer`: instructions, a QR code made of half blocks, and the ticket on its own line.
+    let (code, out, err) = a.pomo(&["pair", "offer"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains('\u{2580}') || out.contains('\u{2584}') || out.contains('\u{2588}'), "no QR code in:\n{out}");
+    let human_ticket = out.lines().find(|l| l.starts_with("pomo-pair:")).expect("ticket line").to_string();
+    // --json prints exactly the API body: no QR, one object.
+    let offer = a.json(&["pair", "offer"]);
+    let ticket = offer["ticket"].as_str().unwrap().to_string();
+    assert_ne!(ticket, human_ticket, "every offer is a new single-use ticket");
+    assert!(offer["expires_ms"].as_i64().unwrap() > 0);
+
+    let (code, _, err) = b.pomo(&["pair", "join", "pomo-pair:garbage"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("bad ticket"), "{err}");
+
+    let (code, out, err) = b.pomo(&["pair", "join", &ticket]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("paired:") && out.contains("alpha") && out.contains(&a.device_id()), "{out}");
+
+    let d = a.json(&["devices"]);
+    assert_eq!((d["name"].as_str(), d["device_id"].as_str()), (Some("alpha"), Some(a.device_id().as_str())));
+    assert_eq!(d["devices"][0]["device_id"], json!(b.device_id()));
+    assert_eq!(d["devices"][0]["paired"], true);
+    let (_, out, _) = a.pomo(&["devices"]);
+    assert!(out.contains("this device: alpha") && out.contains("beta") && out.contains("paired"), "{out}");
+
+    // A starts a block; B shows it.
+    a.json(&["start", "--minutes", "10", "--label", "shared"]);
+    let mut shared = false;
+    for _ in 0..60 {
+        let st = b.json(&["status"]);
+        if st["timer"]["block"]["label"] == "shared" {
+            assert_eq!(st["timer"]["block"]["device_id"], json!(a.device_id()));
+            shared = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(shared, "B never showed A's block");
+    let (_, out, _) = b.pomo(&["status"]);
+    assert!(out.contains("running focus \"shared\""), "{out}");
+
+    let r = b.json(&["sync", "--device", &a.device_id()]);
+    assert_eq!(r["synced"][0]["device_id"], json!(a.device_id()));
+    assert!(r["synced"][0]["error"].is_null(), "{r}");
+    let (code, out, err) = b.pomo(&["sync"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("sent") && out.contains("received"), "{out}");
+    let (code, _, err) = b.pomo(&["sync", "--device", "nope"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("unknown device"), "{err}");
+
+    let r = b.json(&["revoke", &a.device_id()]);
+    assert_eq!((r["device"]["revoked"].as_bool(), r["device"]["paired"].as_bool()), (Some(true), Some(false)));
+    let (_, out, _) = b.pomo(&["devices"]);
+    assert!(out.contains("revoked"), "{out}");
+    let (code, _, err) = b.pomo(&["revoke", "nope"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("unknown device"), "{err}");
+}
+
+#[test]
+fn device_commands_fail_cleanly_when_sync_is_off() {
+    let e = Env::new();
+    for args in [&["devices"][..], &["pair", "offer"], &["sync"], &["revoke", "x"], &["pair", "join", "pomo-pair:x"]] {
+        let (code, _, err) = e.pomo(args);
+        assert_eq!(code, 1, "{args:?}");
+        assert!(err.contains("sync is off"), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn mcp_get_devices_is_read_only_and_listed() {
+    let a = Env::with(SyncMode::Local, "alpha");
+    let mut m = Mcp::spawn(a.tmp.path());
+    let res = m.tool("get_devices", json!({}));
+    assert_eq!(res["isError"], false);
+    let body: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["name"], "alpha");
+    assert!(body["devices"].as_array().unwrap().is_empty());
+    for denied in ["pair_offer", "sync", "revoke_device"] {
+        assert_eq!(m.tool(denied, json!({}))["isError"], true, "{denied}");
+    }
 }

@@ -76,6 +76,29 @@ enum Cmd {
     },
     /// Run the MCP server on stdio.
     Mcp,
+    /// List this Device and the Devices it knows.
+    Devices,
+    /// Pair with another Device.
+    Pair {
+        #[command(subcommand)]
+        action: PairCmd,
+    },
+    /// Sync now with paired Devices.
+    Sync {
+        /// Only this Device (default: every paired Device with a known address).
+        #[arg(long)]
+        device: Option<String>,
+    },
+    /// Stop trusting a Device.
+    Revoke { device_id: String },
+}
+
+#[derive(Subcommand)]
+enum PairCmd {
+    /// Print a single-use pairing ticket (five minutes) and a QR code for the other Device.
+    Offer,
+    /// Join the Device that printed `ticket`.
+    Join { ticket: String },
 }
 
 fn fmt_dur(ms: i64) -> String {
@@ -173,12 +196,59 @@ fn render(cmd: &Cmd, v: &Value) {
                 println!("{}", event_line(e));
             }
         }
+        Cmd::Devices => {
+            println!("this device: {}  {}", v["name"].as_str().unwrap_or("?"), v["device_id"].as_str().unwrap_or("?"));
+            let devices = v["devices"].as_array().cloned().unwrap_or_default();
+            if devices.is_empty() {
+                println!("no other devices (pair one with `pomo pair offer`)");
+            }
+            for d in &devices {
+                println!("{}", device_line(d));
+            }
+        }
+        Cmd::Pair { action: PairCmd::Offer } => {
+            let ticket = v["ticket"].as_str().unwrap_or("");
+            let mins = (v["expires_ms"].as_i64().unwrap_or(0) - ops::now_ms()).max(0) / 60_000;
+            println!("Scan this code, or run `pomo pair join <ticket>` on the other device.");
+            println!("Single use, expires in about {} min ({}).\n", mins.max(1), local_time(v["expires_ms"].as_i64().unwrap_or(0)));
+            match pomo_cli::qr::render(ticket) {
+                Ok(qr) => println!("{qr}\n"),
+                Err(e) => eprintln!("pomo: {e}"),
+            }
+            println!("{ticket}");
+        }
+        Cmd::Pair { action: PairCmd::Join { .. } } => println!("paired: {}", device_line(&v["device"])),
+        Cmd::Sync { .. } => {
+            let synced = v["synced"].as_array().cloned().unwrap_or_default();
+            if synced.is_empty() {
+                println!("no paired devices to sync with");
+            }
+            for s in &synced {
+                let id = s["device_id"].as_str().unwrap_or("?");
+                match s["error"].as_str() {
+                    Some(e) => println!("{id}  failed: {e}"),
+                    None => println!("{id}  sent {}, received {}", s["sent"], s["received"]),
+                }
+            }
+        }
+        Cmd::Revoke { .. } => println!("revoked: {}", device_line(&v["device"])),
         _ => {
             let verb = v["event"]["type"].as_str().unwrap_or("").rsplit('.').next().unwrap_or("").to_string();
             let replay = if v["replayed"].as_bool() == Some(true) { " (replayed)" } else { "" };
             println!("{verb}{replay}: {}", timer_line(&v["timer"]));
         }
     }
+}
+
+fn device_line(d: &Value) -> String {
+    let state = if d["revoked"].as_bool() == Some(true) {
+        "revoked"
+    } else if d["paired"].as_bool() == Some(true) {
+        "paired"
+    } else {
+        "not paired"
+    };
+    format!("{:<20} {}  {state}", d["name"].as_str().unwrap_or("(unnamed)"), d["device_id"].as_str().unwrap_or("?"))
 }
 
 fn event_line(e: &Value) -> String {
@@ -257,6 +327,7 @@ fn main() -> ExitCode {
     enum Req {
         Command(Value),
         Get(&'static str, ops::Query),
+        Post(String, Value),
         Follow,
     }
     let req = match &cli.cmd {
@@ -277,6 +348,16 @@ fn main() -> ExitCode {
         Cmd::Stats { since, by } => ops::stats_query(since.as_deref(), by.as_deref()).map(|q| Req::Get("/v1/stats", q)),
         Cmd::Events { follow: true } => Ok(Req::Follow),
         Cmd::Events { follow: false } => Ok(Req::Get("/v1/events", vec![])),
+        Cmd::Devices => Ok(Req::Get("/v1/devices", vec![])),
+        Cmd::Pair { action: PairCmd::Offer } => Ok(Req::Post("/v1/pair/offer".into(), serde_json::json!({}))),
+        Cmd::Pair { action: PairCmd::Join { ticket } } => {
+            Ok(Req::Post("/v1/pair/join".into(), serde_json::json!({"ticket": ticket})))
+        }
+        Cmd::Sync { device } => {
+            let body = device.as_ref().map_or_else(|| serde_json::json!({}), |d| serde_json::json!({"device_id": d}));
+            Ok(Req::Post("/v1/sync".into(), body))
+        }
+        Cmd::Revoke { device_id } => Ok(Req::Post(format!("/v1/devices/{device_id}/revoke"), serde_json::json!({}))),
         Cmd::Mcp => unreachable!(),
     };
     let req = match req {
@@ -291,6 +372,7 @@ fn main() -> ExitCode {
     let res = match req {
         Req::Command(body) => client.post_command(&body),
         Req::Get(path, q) => client.get(path, &q),
+        Req::Post(path, body) => client.post(&path, &body),
         Req::Follow => {
             return match follow(&client, cli.json) {
                 Ok(()) => ExitCode::SUCCESS,

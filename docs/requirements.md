@@ -5,8 +5,8 @@ Terms follow `../CONTEXT.md`. Priority: **P0** first release, **P1** soon after,
 ## Goals
 
 1. A calm, native Pomodoro timer on Mac and iPhone, in the spirit of Kofe Flow.
-2. One live Timer and one history shared across all my Devices, with no account and no cloud.
-3. My Agents can start timers and measure time spent as first-class users.
+2. One live Timer and one history shared across all of a user's Devices, with no account and no cloud.
+3. Agents can start timers and measure time spent as first-class users.
 4. Portable to Android, Windows, Linux and web later without redesign.
 
 ## Non-goals
@@ -55,7 +55,7 @@ Terms follow `../CONTEXT.md`. Priority: **P0** first release, **P1** soon after,
 
 | ID | Requirement | Pri |
 | --- | --- | --- |
-| S1 | Peer-to-peer Sync between my Devices over iroh, end-to-end encrypted | P0 |
+| S1 | Peer-to-peer Sync between a user's Devices over iroh, end-to-end encrypted | P0 |
 | S2 | Pair a new Device once by scanning a QR code | P0 |
 | S3 | Every Device works fully offline and converges when it reconnects | P0 |
 | S4 | Applying the same Events in any order, any number of times, yields the same state | P0 |

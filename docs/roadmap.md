@@ -1,6 +1,8 @@
 # Roadmap: what we make first
 
-Order is chosen to retire the riskiest unknowns early and to be useful to my Agents from the first Mac milestone.
+Order is chosen to retire the riskiest unknowns early and to be useful to Agents from the first Mac milestone.
+
+Status: M0 to M4 are implemented and tested (the iPhone Shell in the simulator, not on a device). M5 is partly done: stats, widgets, shortcuts, device revocation and token hardening exist; export, App Intents and per-agent token scopes do not. Android, Windows, Linux and web have not been started.
 
 ```mermaid
 flowchart LR

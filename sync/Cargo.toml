@@ -3,6 +3,10 @@ name = "pomo-sync"
 version = "0.1.0"
 edition = "2021"
 description = "Pomo Sync: peer-to-peer event exchange over iroh (spec/sync.md)"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
 
 [dependencies]
 pomo-core = { path = "../core" }

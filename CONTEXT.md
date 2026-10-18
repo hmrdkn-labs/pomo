@@ -1,6 +1,6 @@
 # Pomo
 
-A personal, local-only Pomodoro timer that runs natively on every device I own, keeps one shared history across them, and lets my AI agents start timers and measure where time went.
+A personal, local-only Pomodoro timer that runs natively on every device a user owns, keeps one shared history across them, and lets AI agents start timers and measure where time went.
 
 ## Language
 

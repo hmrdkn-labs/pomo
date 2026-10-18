@@ -3,6 +3,10 @@ name = "pomod"
 version = "0.1.0"
 edition = "2021"
 description = "Pomo Daemon: local HTTP agent API over the Core store"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
 
 [lib]
 name = "pomod"

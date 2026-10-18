@@ -3,6 +3,10 @@ name = "pomo-ffi"
 version = "0.1.0"
 edition = "2021"
 description = "Pomo FFI: the Core and Sync node behind UniFFI, for the Apple Shells"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
 
 [lib]
 name = "pomo_ffi"

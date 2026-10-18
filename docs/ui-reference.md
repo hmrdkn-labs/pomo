@@ -73,7 +73,7 @@ SF Symbols on Apple platforms. Phase glyphs: a filled circle for focus, a cup fo
 - Paused shows the frozen remaining time with a "Paused" state.
 - A block that ended while the Device was off shows its completed outcome on open, not a negative timer.
 - Agent-started blocks show a small Source tag (for example "started by assistant") in the popover and the history.
-- Pairing shows a QR code on the Mac and a scanner on the iPhone, with a confirmation code on both screens.
+- Pairing shows a QR code on the Mac (a one-time, five-minute ticket) and a scanner on the iPhone. Both screens show the other Device's name once paired.
 
 ## Accessibility
 

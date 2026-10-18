@@ -44,3 +44,15 @@ Server-sent events. Event `pomo.event` with the Event JSON as data, one per newl
 ## MCP (`pomo mcp`, stdio)
 
 Tools, each returning the API response as JSON text, all with `source = agent:<mcp-client-name>` taken from the client's `initialize` info (fallback `agent:mcp`): `start_focus(minutes?, label?, project?)`, `start_break(kind: short|long, minutes?)`, `pause`, `resume`, `stop`, `skip`, `extend(minutes)`, `reset`, `label_block(label, project?, block_id?)`, `get_status`, `list_blocks(since?, limit?)`, `get_stats(since?, group_by?)`. `since` accepts `7d`, `24h` or an ISO-8601 timestamp. Tool descriptions say plainly what each does and what state it needs. A failed Command is returned as a tool error with the API error message.
+
+## Devices and sync (added with the sync integration)
+
+`pomod` runs a `pomo-sync` node. Flags: `--sync n0|local|off` (default `n0`: real relays; `local`: no relays, for tests; `off`: no node, the endpoints below return `501 sync_disabled`) and `--name <device name>` (default: the machine's hostname). The Daemon's `device_id` is its iroh endpoint id; the key lives in `$POMO_HOME/meta/key`. Events ingested from peers are published on `/v1/stream` like local ones.
+
+- `GET /v1/devices` → `{"device_id": "<own>", "name": "<own>", "devices": [{"device_id","name","paired","revoked"}]}` (own Device excluded from the list).
+- `POST /v1/pair/offer` → `{"ticket": "pomo-pair:...", "expires_ms": N}`. The ticket is single use, five minutes.
+- `POST /v1/pair/join` body `{"ticket": "...", "name": "<optional own name override>"}` → `{"device": {...}}`; pairs and runs one sync session. `400 bad_ticket`, `409 pairing_rejected` (with the peer's reason).
+- `POST /v1/sync` body `{"device_id": "<optional>"}` → `{"synced": [{"device_id","sent","received"}]}`; without `device_id`, syncs with every paired, non-revoked Device whose address is known; per-peer failures are reported as `{"device_id","error"}` entries, not an HTTP error.
+- `POST /v1/devices/{device_id}/revoke` → `{"device": {...}}`.
+
+CLI: `pomo devices`, `pomo pair offer` (prints the ticket and a terminal QR code), `pomo pair join <ticket>`, `pomo sync [--device ID]`, `pomo revoke <device_id>`.

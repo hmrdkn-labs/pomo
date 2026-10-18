@@ -23,7 +23,7 @@ public struct SettingsView: View {
             }
             .listRowBackground(theme.paperRaised)
             Section("General") {
-                Toggle("Open at login", isOn: Binding(get: { openAtLogin }, set: setLogin))
+                Toggle("Open at login", isOn: Binding(get: { openAtLogin }, set: { setLogin($0) }))
                 if let loginError { Text(loginError).pomoFont(.secondary).foregroundStyle(theme.danger) }
                 Toggle("Show Dock icon", isOn: $s.showDockIcon)
                     .onChange(of: s.showDockIcon) { _, _ in env.applyDockPolicy() }

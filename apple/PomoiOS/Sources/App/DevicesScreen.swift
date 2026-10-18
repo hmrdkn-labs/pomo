@@ -5,12 +5,10 @@ import SwiftUI
 struct DevicesScreen: View {
     var devices: DevicesViewModel
     var sync: SyncCoordinator
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.pomoTheme) private var theme
     @State private var scanning = false
     @State private var confirmRevoke: DeviceInfo?
     @FocusState private var ticketFocused: Bool
-
-    private var theme: Theme { Theme(scheme) }
 
     var body: some View {
         NavigationStack {
@@ -21,7 +19,7 @@ struct DevicesScreen: View {
                 syncSection
             }
             .scrollContentBackground(.hidden)
-            .background(theme.bg)
+            .background(theme.paper)
             .navigationTitle("Devices")
             .task { await devices.load() }
             .refreshable { await devices.load() }
@@ -47,21 +45,22 @@ struct DevicesScreen: View {
             LabeledContent("ID", value: String(devices.ownId.prefix(12)))
                 .font(.system(size: Tokens.TypeSize.secondary, design: .monospaced))
         }
+        .listRowBackground(theme.paperRaised)
     }
 
     private var pairedDevices: some View {
         Section("Paired devices") {
             if devices.devices.isEmpty {
                 Text("None yet. Scan the QR code shown on your Mac, or paste its ticket below.")
-                    .font(.system(size: Tokens.TypeSize.secondary)).foregroundStyle(theme.textMuted)
+                    .font(.system(size: Tokens.TypeSize.secondary)).foregroundStyle(theme.inkMuted)
             }
             ForEach(devices.devices) { d in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(d.name.isEmpty ? String(d.deviceId.prefix(8)) : d.name)
                         Text(d.revoked ? "Revoked" : (d.paired ? "Paired" : "Not paired"))
-                            .font(.system(size: Tokens.TypeSize.caption))
-                            .foregroundStyle(d.revoked ? theme.danger : theme.textMuted)
+                            .font(.system(size: Tokens.TypeSize.secondary))
+                            .foregroundStyle(d.revoked ? theme.danger : theme.inkMuted)
                     }
                     Spacer()
                     if !d.revoked {
@@ -75,6 +74,7 @@ struct DevicesScreen: View {
                 Text(e).foregroundStyle(theme.danger).font(.system(size: Tokens.TypeSize.secondary))
             }
         }
+        .listRowBackground(theme.paperRaised)
     }
 
     private var pairing: some View {
@@ -98,7 +98,7 @@ struct DevicesScreen: View {
             }
             if let m = devices.joinMessage {
                 Text(m).font(.system(size: Tokens.TypeSize.secondary))
-                    .foregroundStyle(devices.joinFailed ? theme.danger : theme.focus)
+                    .foregroundStyle(devices.joinFailed ? theme.danger : theme.ink)
                     .accessibilityIdentifier("devices.joinMessage")
             }
         } header: {
@@ -106,6 +106,7 @@ struct DevicesScreen: View {
         } footer: {
             Text("On your Mac run `pomo pair offer`, or open Settings in the Pomo menu bar app, and scan the code. The ticket works once and expires after five minutes.")
         }
+        .listRowBackground(theme.paperRaised)
     }
 
     private var syncSection: some View {
@@ -127,7 +128,7 @@ struct DevicesScreen: View {
                     if let e = r.error {
                         Text(e).foregroundStyle(theme.danger)
                     } else {
-                        Text("Sent \(r.sent ?? 0), received \(r.received ?? 0)").foregroundStyle(theme.textMuted)
+                        Text("Sent \(r.sent ?? 0), received \(r.received ?? 0)").foregroundStyle(theme.inkMuted)
                     }
                 }
                 .font(.system(size: Tokens.TypeSize.secondary))
@@ -140,6 +141,7 @@ struct DevicesScreen: View {
         } footer: {
             Text(syncFooter)
         }
+        .listRowBackground(theme.paperRaised)
     }
 
     private var syncFooter: String {
@@ -175,7 +177,7 @@ private struct ScannerSheet: View {
                 .ignoresSafeArea()
                 Text(status)
                     .padding(Tokens.Spacing.m)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.surface))
                     .padding(Tokens.Spacing.l)
                     .accessibilityAddTraits(.updatesFrequently)
             }

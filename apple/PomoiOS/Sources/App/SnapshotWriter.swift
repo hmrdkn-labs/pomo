@@ -3,7 +3,8 @@ import PomoLive
 import PomoUI
 import WidgetKit
 
-/// Writes today's focus total for the home screen widget, and reloads its timelines when it changed.
+/// Writes today's focus total and whether a block runs for the home screen widget, and reloads its timelines
+/// when either changed.
 @MainActor
 final class SnapshotWriter {
     private let store: SnapshotStore
@@ -29,9 +30,15 @@ final class SnapshotWriter {
 }
 
 extension TodaySnapshot {
-    /// Equal but for `updatedMs`.
+    /// Equal but for `updatedMs` and the millisecond jitter of re-deriving a running block's end time.
     func sameTotals(as other: TodaySnapshot) -> Bool {
-        dayStartMs == other.dayStartMs && dayEndMs == other.dayEndMs && focusMs == other.focusMs
-            && completedFocus == other.completedFocus
+        let sameRun: Bool
+        switch (runningUntilMs, other.runningUntilMs) {
+        case (nil, nil): sameRun = true
+        case let (a?, b?): sameRun = abs(a - b) < 1000
+        default: sameRun = false
+        }
+        return dayStartMs == other.dayStartMs && dayEndMs == other.dayEndMs && focusMs == other.focusMs
+            && completedFocus == other.completedFocus && sameRun
     }
 }

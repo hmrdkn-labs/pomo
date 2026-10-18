@@ -4,8 +4,9 @@ import PomoUI
 import SwiftUI
 import WidgetKit
 
-/// Lock Screen and Dynamic Island presentation of the running block. Running countdowns are drawn by the system
-/// from absolute dates (`Text(timerInterval:)`, `ProgressView(timerInterval:)`), so they tick without the app.
+/// Lock Screen and Dynamic Island presentation of the running block. `ink` ground in both appearances, the serif
+/// countdown, a 3 pt rule. Running countdowns and the rule are drawn by the system from absolute dates
+/// (`Text(timerInterval:)`, `ProgressView(timerInterval:)`), so they tick without the app.
 struct BlockLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: PomoActivityAttributes.self) { context in
@@ -14,16 +15,10 @@ struct BlockLiveActivity: Widget {
             let c = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label(c.phaseName, systemImage: glyph(c)).font(.headline).foregroundStyle(accent(c))
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    CountdownText(content: c, isStale: context.isStale).font(.title2.monospacedDigit()).frame(maxWidth: 90, alignment: .trailing)
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    if let label = c.label { Text(label).lineLimit(1) }
+                    PhaseTitle(content: c)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    CountdownBar(content: c).tint(accent(c))
+                    ActivityBody(content: c, isStale: context.isStale)
                 }
             } compactLeading: {
                 Image(systemName: glyph(c)).foregroundStyle(accent(c))
@@ -38,11 +33,12 @@ struct BlockLiveActivity: Widget {
 }
 
 private func glyph(_ c: LiveActivityContent) -> String {
-    c.paused ? "pause.fill" : (c.kind.isBreak ? "cup.and.saucer.fill" : "circle.fill")
+    c.paused ? Glyph.paused.symbol : (c.kind.isBreak ? Glyph.breakTime.symbol : Glyph.focus.symbol)
 }
 
-private func accent(_ c: LiveActivityContent, scheme: ColorScheme = .dark) -> Color {
-    Theme(scheme).accent(for: c.kind)
+/// Rule and glyph colour on the `ink` ground: `focus` or `break`, `ink-muted` while paused.
+private func accent(_ c: LiveActivityContent) -> Color {
+    c.paused ? ActivityPalette.muted : ActivityPalette.accent(for: c.kind)
 }
 
 /// `mm:ss` from the system while running, the frozen value while paused, and "Done" once stale.
@@ -61,14 +57,53 @@ private struct CountdownText: View {
     }
 }
 
-private struct CountdownBar: View {
+private struct PhaseTitle: View {
     var content: LiveActivityContent
 
     var body: some View {
-        if content.paused {
-            ProgressView(value: content.progress(at: 0))
-        } else {
-            ProgressView(timerInterval: content.interval, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+        HStack(spacing: Tokens.Spacing.s) {
+            Image(systemName: glyph(content)).imageScale(.small).foregroundStyle(accent(content)).accessibilityHidden(true)
+            Text(content.phaseName).pomoFont(.phase).foregroundStyle(ActivityPalette.text)
+        }
+    }
+}
+
+/// The 3 pt rule: full at the start and shortening from the right. Running, the system animates it from the
+/// absolute interval; paused, it is frozen at the remaining fraction.
+private struct LiveRule: View {
+    var content: LiveActivityContent
+
+    var body: some View {
+        Group {
+            if content.paused {
+                RuleBar(
+                    fraction: content.remainingFraction(at: 0), tint: accent(content),
+                    track: Tokens.color("hairline", .dark), height: Tokens.Rule.heightPopover)
+            } else {
+                ProgressView(timerInterval: content.interval, countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
+                    .progressViewStyle(.linear)
+                    .tint(accent(content))
+                    .frame(height: Tokens.Rule.heightPopover)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ActivityBody: View {
+    var content: LiveActivityContent
+    var isStale: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+            CountdownText(content: content, isStale: isStale)
+                .font(.system(size: Tokens.TypeSize.countdownActivity, weight: .light, design: .serif).monospacedDigit())
+                .foregroundStyle(ActivityPalette.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            LiveRule(content: content)
+            if let label = content.label {
+                Text(label).pomoFont(.secondary).foregroundStyle(ActivityPalette.muted).lineLimit(1)
+            }
         }
     }
 }
@@ -76,39 +111,15 @@ private struct CountdownBar: View {
 private struct LockScreenView: View {
     var content: LiveActivityContent
     var isStale: Bool
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let theme = Theme(scheme)
-        let tint = theme.accent(for: content.kind)
-        HStack(spacing: Tokens.Spacing.l) {
-            ZStack {
-                if content.paused {
-                    ProgressView(value: content.progress(at: 0))
-                        .progressViewStyle(.circular)
-                } else {
-                    ProgressView(timerInterval: content.interval, countsDown: false) { EmptyView() } currentValueLabel: {
-                        Image(systemName: glyph(content)).foregroundStyle(tint)
-                    }
-                    .progressViewStyle(.circular)
-                }
-            }
-            .tint(tint)
-            .frame(width: 56, height: 56)
-
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-                Text(content.phaseName).font(.system(size: Tokens.TypeSize.secondary, weight: .semibold)).foregroundStyle(tint)
-                CountdownText(content: content, isStale: isStale)
-                    .font(.system(size: 34, weight: .light).monospacedDigit())
-                if let label = content.label {
-                    Text(label).font(.system(size: Tokens.TypeSize.secondary)).foregroundStyle(theme.textMuted).lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
+            PhaseTitle(content: content)
+            ActivityBody(content: content, isStale: isStale)
         }
         .padding(Tokens.Spacing.l)
-        .foregroundStyle(theme.text)
-        .activityBackgroundTint(theme.bg)
-        .activitySystemActionForegroundColor(theme.text)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .activityBackgroundTint(ActivityPalette.ground)
+        .activitySystemActionForegroundColor(ActivityPalette.text)
     }
 }

@@ -4,9 +4,7 @@ import SwiftUI
 struct SettingsScreen: View {
     var settings: PomoSettings
     var devices: DevicesViewModel
-    @Environment(\.colorScheme) private var scheme
-
-    private var theme: Theme { Theme(scheme) }
+    @Environment(\.pomoTheme) private var theme
 
     var body: some View {
         NavigationStack {
@@ -21,13 +19,15 @@ struct SettingsScreen: View {
                 } footer: {
                     Text("Used when this iPhone starts a block. Blocks started on another device keep that device's length.")
                 }
+                .listRowBackground(theme.paperRaised)
                 Section("About") {
                     LabeledContent("Device", value: devices.ownName)
                     LabeledContent("Data", value: "On this iPhone and your paired devices only")
                 }
+                .listRowBackground(theme.paperRaised)
             }
             .scrollContentBackground(.hidden)
-            .background(theme.bg)
+            .background(theme.paper)
             .navigationTitle("Settings")
             .task { await devices.load() }
         }

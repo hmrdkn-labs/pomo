@@ -8,8 +8,8 @@ public struct LiveActivityContent: Codable, Hashable, Sendable {
     public var kind: Kind
     public var label: String?
     public var paused: Bool
-    /// Running: when the block started counting, `endsMs - plannedMs`, so a ring over `startMs...endsMs`
-    /// shows the right fraction after pauses and extensions. Paused: the same, as if resumed now.
+    /// Running: when the block started counting, `endsMs - plannedMs`, so the rule over `startMs...endsMs`
+    /// shows the right length after pauses and extensions. Paused: the same, as if resumed now.
     public var startMs: Int64
     /// Running: absolute end time. Paused: the end time if resumed now.
     public var endsMs: Int64
@@ -28,7 +28,7 @@ public struct LiveActivityContent: Codable, Hashable, Sendable {
     public var startDate: Date { Date(timeIntervalSince1970: Double(startMs) / 1000) }
     public var endDate: Date { Date(timeIntervalSince1970: Double(endsMs) / 1000) }
 
-    /// `startDate...endDate` for `ProgressView(timerInterval:)`; never empty or reversed.
+    /// `startDate...endDate` for the system-drawn rule (`ProgressView(timerInterval:)`); never empty or reversed.
     public var interval: ClosedRange<Date> { startDate...max(startDate, endDate) }
 
     public var phaseName: String { paused ? "Paused" : kind.title }
@@ -36,11 +36,11 @@ public struct LiveActivityContent: Codable, Hashable, Sendable {
     /// Frozen `mm:ss` for the paused state.
     public var frozenDisplay: String { Countdown.format(remainingMs: remainingMs) }
 
-    /// 0...1 fraction done, as of `nowMs`.
-    public func progress(at nowMs: Int64) -> Double {
+    /// 1...0 fraction of the block that is left, as of `nowMs`: the length of the rule (full at the start).
+    public func remainingFraction(at nowMs: Int64) -> Double {
         guard plannedMs > 0 else { return 0 }
         let remaining = paused ? remainingMs : max(0, endsMs - nowMs)
-        return min(1, max(0, 1 - Double(remaining) / Double(plannedMs)))
+        return min(1, max(0, Double(remaining) / Double(plannedMs)))
     }
 
     /// When the system should treat the activity as out of date: the block's end.

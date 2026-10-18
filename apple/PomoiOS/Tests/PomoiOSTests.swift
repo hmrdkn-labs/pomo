@@ -65,4 +65,27 @@ final class SnapshotWriterTests: XCTestCase {
         XCTAssertEqual(reloads, 2)
         XCTAssertEqual(SnapshotStore(defaults: defaults).load().focusMs, 120_000)
     }
+
+    func testWritesWhenABlockStartsAndStops() throws {
+        let suite = "pomo.ios.test.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var reloads = 0
+        let writer = SnapshotWriter(store: SnapshotStore(defaults: defaults), tzOffsetMin: { 0 }, reload: { reloads += 1 })
+        func status(now: Int64, remaining: Int64?) -> Status {
+            let block = Block(id: "b", kind: .focus, plannedMs: 1_500_000)
+            let timer = remaining.map { TimerState(status: .running, block: block, remainingMs: $0) } ?? TimerState(status: .idle)
+            return Status(nowMs: now, timer: timer, today: Today(focusMs: 0, completedFocus: 0))
+        }
+        writer.write(status: status(now: 1_800_000_000_000, remaining: nil))
+        XCTAssertEqual(reloads, 1, "the first write replaces the empty snapshot")
+        writer.write(status: status(now: 1_800_000_001_000, remaining: 600_000))
+        XCTAssertEqual(reloads, 2)
+        XCTAssertTrue(SnapshotStore(defaults: defaults).load().isRunning(at: 1_800_000_002_000))
+        writer.write(status: status(now: 1_800_000_031_000, remaining: 570_003))  // same block, jittered end
+        XCTAssertEqual(reloads, 2)
+        writer.write(status: status(now: 1_800_000_040_000, remaining: nil))
+        XCTAssertEqual(reloads, 3)
+        XCTAssertFalse(SnapshotStore(defaults: defaults).load().isRunning(at: 1_800_000_041_000))
+    }
 }

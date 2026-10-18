@@ -8,16 +8,15 @@ struct ShortcutRecorder: View {
     var model: ShortcutsModel
     @State private var recording = false
     @State private var monitor: Any?
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.pomoTheme) private var theme
 
     var body: some View {
-        let theme = Theme(scheme)
         VStack(alignment: .trailing, spacing: Tokens.Spacing.xs) {
             HStack(spacing: Tokens.Spacing.s) {
                 Button(action: toggle) {
                     Text(label)
                         .frame(minWidth: 96)
-                        .foregroundStyle(recording ? theme.focus : theme.text)
+                        .foregroundStyle(theme.ink)
                 }
                 .accessibilityLabel("\(action.title) shortcut")
                 .accessibilityValue(model.combos[action]?.display ?? "none")
@@ -29,7 +28,7 @@ struct ShortcutRecorder: View {
                 }
             }
             if let e = model.errors[action] {
-                Text(e).font(.caption).foregroundStyle(theme.danger).multilineTextAlignment(.trailing)
+                Text(e).pomoFont(.secondary).foregroundStyle(theme.danger).multilineTextAlignment(.trailing)
             }
         }
         .onDisappear(perform: stop)

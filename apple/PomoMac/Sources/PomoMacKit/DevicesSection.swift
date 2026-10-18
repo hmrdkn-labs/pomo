@@ -9,20 +9,18 @@ public struct DevicesSection: View {
     @State private var revoking: DeviceInfo?
     @State private var copiedId = false
     @State private var copiedTicket = false
-    @Environment(\.colorScheme) private var scheme
+    @Environment(\.pomoTheme) private var theme
 
     public init(model: DevicesViewModel, pairing: Bool = false) {
         self.model = model
         _pairing = State(initialValue: pairing)
     }
 
-    private var theme: Theme { Theme(scheme) }
-
     public var body: some View {
         Section("Devices") {
             switch model.availability {
             case .loading:
-                Text("Loading…").foregroundStyle(.secondary)
+                Text("Loading…").foregroundStyle(theme.inkMuted)
             case let .offline(message):
                 notice("The daemon is not running", message, symbol: "exclamationmark.triangle")
                 Button("Try again") { Task { await model.load() } }
@@ -32,6 +30,7 @@ public struct DevicesSection: View {
                 ready
             }
         }
+        .listRowBackground(theme.paperRaised)
         .task { await model.load() }
         .confirmationDialog(
             "Revoke \(revoking?.name ?? "device")?",
@@ -61,7 +60,7 @@ public struct DevicesSection: View {
                 HStack(spacing: Tokens.Spacing.xs) {
                     Text(shortId(model.ownId))
                         .font(.system(size: Tokens.TypeSize.secondary, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.inkMuted)
                         .textSelection(.enabled)
                         .help(model.ownId)
                     Button {
@@ -77,11 +76,11 @@ public struct DevicesSection: View {
         .onChange(of: model.ownId) { _, _ in copiedId = false }
 
         if model.devices.isEmpty {
-            Text("No paired devices yet.").foregroundStyle(.secondary)
+            Text("No paired devices yet.").foregroundStyle(theme.inkMuted)
         } else {
             ForEach(model.devices) { device in row(device) }
         }
-        if let e = model.actionError { Text(e).font(.caption).foregroundStyle(theme.danger) }
+        if let e = model.actionError { Text(e).pomoFont(.secondary).foregroundStyle(theme.danger) }
 
         syncRow
         pairPanel
@@ -91,21 +90,19 @@ public struct DevicesSection: View {
     private func row(_ d: DeviceInfo) -> some View {
         HStack {
             Image(systemName: d.revoked ? "iphone.slash" : "iphone")
-                .foregroundStyle(d.revoked ? theme.textMuted : theme.focus)
+                .foregroundStyle(d.revoked ? theme.inkMuted : theme.ink)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(d.name).strikethrough(d.revoked).foregroundStyle(d.revoked ? theme.textMuted : theme.text)
+                Text(d.name).strikethrough(d.revoked).foregroundStyle(d.revoked ? theme.inkMuted : theme.ink)
                 Text(shortId(d.deviceId))
                     .font(.system(size: Tokens.TypeSize.secondary, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.inkMuted)
                     .help(d.deviceId)
             }
             Spacer()
             if d.revoked {
                 Text("Revoked")
-                    .font(.system(size: Tokens.TypeSize.secondary, weight: .medium))
-                    .padding(.horizontal, Tokens.Spacing.s).padding(.vertical, 2)
-                    .background(theme.danger.opacity(0.15), in: Capsule())
+                    .pomoFont(.secondary, weight: .medium)
                     .foregroundStyle(theme.danger)
             } else {
                 Button("Revoke…", role: .destructive) { revoking = d }
@@ -129,18 +126,18 @@ public struct DevicesSection: View {
                 }
                 .disabled(!model.canSync)
                 if model.activeDevices.isEmpty {
-                    Text(model.devices.isEmpty ? "Pair a device first." : "Every paired device is revoked.").font(.caption).foregroundStyle(.secondary)
+                    Text(model.devices.isEmpty ? "Pair a device first." : "Every paired device is revoked.").pomoFont(.secondary).foregroundStyle(theme.inkMuted)
                 }
             }
-            if let e = model.syncError { Text(e).font(.caption).foregroundStyle(theme.danger) }
+            if let e = model.syncError { Text(e).pomoFont(.secondary).foregroundStyle(theme.danger) }
             if let results = model.syncResults {
                 if results.isEmpty {
-                    Text("No device is reachable from here yet. Sync from the other device, or pair again from this side.").font(.caption).foregroundStyle(.secondary)
+                    Text("No device is reachable from here yet. Sync from the other device, or pair again from this side.").pomoFont(.secondary).foregroundStyle(theme.inkMuted)
                 }
                 ForEach(results) { r in
                     HStack(spacing: Tokens.Spacing.xs) {
                         Image(systemName: r.error == nil ? "checkmark.circle" : "xmark.octagon")
-                            .foregroundStyle(r.error == nil ? theme.focus : theme.danger)
+                            .foregroundStyle(r.error == nil ? theme.ink : theme.danger)
                             .accessibilityHidden(true)
                         if let error = r.error {
                             Text("\(model.name(for: r.deviceId)): \(error)").foregroundStyle(theme.danger)
@@ -148,7 +145,7 @@ public struct DevicesSection: View {
                             Text("\(model.name(for: r.deviceId)): sent \(r.sent ?? 0), received \(r.received ?? 0)")
                         }
                     }
-                    .font(.caption)
+                    .pomoFont(.secondary)
                     .accessibilityElement(children: .combine)
                 }
             }
@@ -159,16 +156,19 @@ public struct DevicesSection: View {
 
     @ViewBuilder private var pairPanel: some View {
         if let notice = model.pairedNotice {
-            Label(notice, systemImage: "checkmark.circle.fill").foregroundStyle(theme.focus)
+            Label(notice, systemImage: "checkmark.circle").foregroundStyle(theme.ink)
         }
         if pairing {
             VStack(spacing: Tokens.Spacing.m) {
                 if let state = model.offer {
                     QRView(ticket: state.offer.ticket, size: 220)
+                        .padding(Tokens.Spacing.l)
+                        .background(theme.paperRaised, in: RoundedRectangle(cornerRadius: Tokens.Radius.surface))
+                        .overlay(RoundedRectangle(cornerRadius: Tokens.Radius.surface).stroke(theme.hairline))
                     HStack(spacing: Tokens.Spacing.m) {
                         Text("Expires in \(state.countdownText)")
                             .monospacedDigit()
-                            .foregroundStyle(state.remainingSeconds <= 30 ? theme.danger : theme.textMuted)
+                            .foregroundStyle(state.remainingSeconds <= 30 ? theme.danger : theme.inkMuted)
                             .accessibilityLabel("Ticket expires in \(state.remainingSeconds) seconds")
                         Button {
                             copy(state.offer.ticket)
@@ -176,7 +176,7 @@ public struct DevicesSection: View {
                         } label: { Label(copiedTicket ? "Copied" : "Copy ticket", systemImage: copiedTicket ? "checkmark" : "doc.on.doc") }
                     }
                     Text("Scan on the other device, or paste the ticket there. It works once. A new one appears when this expires.")
-                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        .pomoFont(.secondary).foregroundStyle(theme.inkMuted).multilineTextAlignment(.center)
                 } else if model.isOffering {
                     ProgressView("Getting a ticket…")
                 } else if let e = model.offerError {
@@ -206,7 +206,7 @@ public struct DevicesSection: View {
             }
             if model.isJoining { ProgressView().controlSize(.small) }
             if let message = model.joinMessage {
-                Text(message).font(.caption).foregroundStyle(model.joinFailed ? theme.danger : theme.focus)
+                Text(message).pomoFont(.secondary).foregroundStyle(model.joinFailed ? theme.danger : theme.ink)
             }
         }
     }
@@ -215,10 +215,10 @@ public struct DevicesSection: View {
 
     private func notice(_ title: String, _ detail: String, symbol: String) -> some View {
         HStack(alignment: .top, spacing: Tokens.Spacing.s) {
-            Image(systemName: symbol).foregroundStyle(theme.textMuted).accessibilityHidden(true)
+            Image(systemName: symbol).foregroundStyle(theme.inkMuted).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).fontWeight(.medium)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).pomoFont(.secondary).foregroundStyle(theme.inkMuted)
             }
         }
         .accessibilityElement(children: .combine)
@@ -236,6 +236,7 @@ public struct DevicesSection: View {
 struct QRView: View {
     var ticket: String
     var size: CGFloat
+    @Environment(\.pomoTheme) private var theme
 
     var body: some View {
         if let qr = QRCode.render(ticket, maxPixels: Int(size * 2)) {
@@ -247,7 +248,7 @@ struct QRView: View {
                 .accessibilityLabel("Pairing QR code")
                 .accessibilityHint("Scan with the other device, or copy the ticket instead")
         } else {
-            Text("Could not draw the QR code. Copy the ticket instead.").foregroundStyle(.secondary)
+            Text("Could not draw the QR code. Copy the ticket instead.").foregroundStyle(theme.inkMuted)
         }
     }
 }

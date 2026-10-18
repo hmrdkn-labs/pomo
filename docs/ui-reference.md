@@ -1,6 +1,6 @@
 # UI and styling reference: "Paper and ink"
 
-Replaces the earlier green, ring-based direction (a copy of Kofe Flow's colour; dropped). Behaviour principles from Kofe Flow still hold; the look is ours.
+Replaces the earlier ring-based direction and its borrowed Kofe Flow palette (dropped). Behaviour principles from Kofe Flow still hold; the look is ours.
 
 ## Principles
 
@@ -40,7 +40,7 @@ Rules: text on `paper` or `paper-raised` is always `ink` or `ink-muted` (both pa
 | `phase` | system sans, semibold, small caps, tracking +1.2 | 12 | "FOCUS", "SHORT BREAK", "PAUSED" |
 | `body` | system sans | 17 | Labels, buttons |
 | `secondary` | system sans | 13 | Footers, sync line |
-| `numeral` | system serif italic | 15 | Today's total, stat figures |
+| `numeral` | system serif italic | 15 | Today's total, ranked times; the three stat figures use the same face at 30 |
 
 ### Shape and spacing
 
@@ -87,7 +87,7 @@ System grouped form on `paper`, rows on `paper-raised`. The pairing QR is always
 
 ### Live Activity and widgets (iPhone)
 
-Lock Screen: `ink` (dark) background in both appearances, countdown in the serif at 40 pt in paper colour, a 3 pt `focus` rule, label in `ink-muted`. Dynamic Island compact: glyph and `mm:ss`; expanded: the Lock Screen layout. Home widget: today's focus total in `numeral` on `paper`, a vermilion dot when a block is running.
+Lock Screen: `ink` (dark) background in both appearances, countdown in the serif at 40 pt in paper colour, a 3 pt `focus` rule, label in `ink-muted`. On that ground the light `ink-muted` (3.1:1) and `break` fall below 4.5:1, so the label, the rule and the glyph use the dark-appearance `ink-muted`, `focus` and `break`. The system draws the running rule (`ProgressView(timerInterval:)`) and gives it rounded ends; the paused rule is square. Dynamic Island compact: glyph and `mm:ss`; expanded: the Lock Screen layout. Home widget: today's focus total in `numeral` on `paper`, a vermilion dot when a block is running.
 
 ## Accessibility
 

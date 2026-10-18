@@ -36,12 +36,27 @@ import Testing
     @Test func idleHasNothing() {
         let c = Countdown(timer: TimerState(status: .idle, remainingMs: nil, nextKind: .focus), nowMs: 1)
         #expect(c == .idle)
-        #expect(c.progress(at: 1) == 0)
+        #expect(c.remainingFraction(at: 1) == 0)
     }
 
-    @Test func progressAndTicks() {
+    @Test func ruleFractionStartsFullAndShortens() {
+        let c = running(remaining: 1_500_000)
+        #expect(c.remainingFraction(at: 1_000_000) == 1)
+        #expect(c.remainingFraction(at: 1_000_000 + 750_000) == 0.5)
+        #expect(c.remainingFraction(at: 1_000_000 + 1_500_000) == 0)
+        #expect(c.remainingFraction(at: 9_000_000) == 0, "past the end never goes negative")
+        // Extended mid-block: the daemon reports a larger planned time, the rule grows back accordingly.
+        let extended = running(remaining: 900_000, planned: 1_800_000)
+        #expect(extended.remainingFraction(at: 1_000_000) == 0.5)
+        // Paused: frozen, independent of the clock.
+        let b = Block(id: "b", kind: .focus, plannedMs: 1_500_000, phase: "paused")
+        let paused = Countdown(timer: TimerState(status: .paused, block: b, remainingMs: 375_000), nowMs: 1)
+        #expect(paused.remainingFraction(at: 1) == 0.25)
+        #expect(paused.remainingFraction(at: 99_999_999) == 0.25)
+    }
+
+    @Test func ticks() {
         let c = running(remaining: 750_000)
-        #expect(c.progress(at: 1_000_000) == 0.5)
         #expect(c.msUntilNextTick(at: 1_000_000) == 1000)
         #expect(c.msUntilNextTick(at: 1_000_250) == 750)
         #expect(running(remaining: 0).msUntilNextTick(at: 1_000_000) == nil)
@@ -54,6 +69,8 @@ import Testing
     @Test func sourceTags() {
         #expect(sourceTag("user") == nil)
         #expect(sourceTag("agent:claude") == "started by claude")
+        #expect(sourceByline("agent:claude") == "by claude")
+        #expect(sourceByline("user") == nil)
     }
 
     @Test func durations() {

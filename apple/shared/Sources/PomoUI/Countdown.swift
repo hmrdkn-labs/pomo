@@ -36,10 +36,10 @@ public struct Countdown: Equatable, Sendable {
         }
     }
 
-    /// 0...1 fraction of the block that is done.
-    public func progress(at nowMs: Int64) -> Double {
+    /// 1...0 fraction of the block that is left: 1 at the start, 0 at the end, 0 when idle. The rule is drawn from it.
+    public func remainingFraction(at nowMs: Int64) -> Double {
         guard status != .idle, plannedMs > 0 else { return 0 }
-        return min(1, max(0, 1 - Double(remainingMs(at: nowMs)) / Double(plannedMs)))
+        return min(1, max(0, Double(remainingMs(at: nowMs)) / Double(plannedMs)))
     }
 
     /// `mm:ss`, rounded up so `00:00` only shows at the end. Minutes grow past 99 for long blocks.
@@ -73,6 +73,11 @@ public func sourceTag(_ source: String) -> String? {
     guard source.hasPrefix("agent:") else { return nil }
     let name = String(source.dropFirst("agent:".count))
     return name.isEmpty ? "started by agent" : "started by \(name)"
+}
+
+/// The same tag as a byline: "by claude".
+public func sourceByline(_ source: String) -> String? {
+    sourceTag(source).map { String($0.dropFirst("started ".count)) }
 }
 
 public func nowMs() -> Int64 { Int64((Date().timeIntervalSince1970 * 1000).rounded()) }

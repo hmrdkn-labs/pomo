@@ -103,7 +103,6 @@ public final class TimerViewModel {
     }
 
     public var display: String { countdown.display(at: nowMs) }
-    public var progress: Double { countdown.progress(at: nowMs) }
 
     public var isFinishedLocally: Bool {
         countdown.status == .running && countdown.remainingMs(at: nowMs) == 0
@@ -125,6 +124,7 @@ public final class TimerViewModel {
     }
 
     public var sourceTag: String? { block.flatMap { PomoUI.sourceTag($0.source) } }
+    public var sourceByline: String? { block.flatMap { PomoUI.sourceByline($0.source) } }
 
     public var lastBlockSummary: String? {
         guard countdown.status == .idle, let b = lastBlock, let outcome = b.outcome else { return nil }

@@ -9,10 +9,16 @@ public struct TodaySnapshot: Codable, Equatable, Sendable {
     public var focusMs: Int64
     public var completedFocus: Int
     public var updatedMs: Int64
+    /// End time of the running block (any kind), nil when nothing runs or the block is paused. The widget shows
+    /// its dot until then, without the app having to run again.
+    public var runningUntilMs: Int64?
 
-    public init(dayStartMs: Int64, dayEndMs: Int64, focusMs: Int64, completedFocus: Int, updatedMs: Int64) {
+    public init(
+        dayStartMs: Int64, dayEndMs: Int64, focusMs: Int64, completedFocus: Int, updatedMs: Int64,
+        runningUntilMs: Int64? = nil
+    ) {
         self.dayStartMs = dayStartMs; self.dayEndMs = dayEndMs; self.focusMs = focusMs
-        self.completedFocus = completedFocus; self.updatedMs = updatedMs
+        self.completedFocus = completedFocus; self.updatedMs = updatedMs; self.runningUntilMs = runningUntilMs
     }
 
     public static let empty = TodaySnapshot(dayStartMs: 0, dayEndMs: 0, focusMs: 0, completedFocus: 0, updatedMs: 0)
@@ -20,10 +26,20 @@ public struct TodaySnapshot: Codable, Equatable, Sendable {
     /// From a status response; the day is the calendar day of `status.nowMs` in `tzOffsetMin`.
     public init(status: Status, tzOffsetMin: Int) {
         let start = StatsRange.dayStart(nowMs: status.nowMs, tzOffsetMin: tzOffsetMin)
+        var runningUntil: Int64?
+        if status.timer.status == .running, let remaining = status.timer.remainingMs, remaining > 0 {
+            runningUntil = status.nowMs + remaining
+        }
         self.init(
             dayStartMs: start, dayEndMs: start + StatsRange.dayMs, focusMs: status.today.focusMs,
-            completedFocus: status.today.completedFocus, updatedMs: status.nowMs
+            completedFocus: status.today.completedFocus, updatedMs: status.nowMs, runningUntilMs: runningUntil
         )
+    }
+
+    /// Whether the widget shows its running dot at `nowMs`.
+    public func isRunning(at nowMs: Int64) -> Bool {
+        guard let until = runningUntilMs else { return false }
+        return nowMs < until
     }
 
     /// The total to show at `nowMs`: zero once the stored day is over (the app has not run since).

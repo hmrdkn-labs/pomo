@@ -71,6 +71,12 @@ to the Home Screen per run. Run only one `xcodebuild` at a time.
 - Lock Screen: the test presses the lock button through the private `pressLockButton` selector; Live Activities ask
   for permission on first use (the test taps Allow).
 
+`Tests/UI/PomoDesignTests.swift` needs no daemon: it walks Timer (idle, running, paused, break), Stats, Devices,
+Settings, the Dynamic Island and the Lock Screen and saves `redesign-ios-<screen>-<light|dark>.png` into
+`TEST_RUNNER_POMO_DESIGN_SHOTS`. Run it once in the simulator's current appearance, then switch
+(`xcrun simctl ui <id> appearance dark`) and run again with `TEST_RUNNER_POMO_DESIGN_APPEARANCE=dark`, which only
+names the files; switch back to `light` afterwards.
+
 ## Install on your iPhone
 
 1. Open `apple/PomoiOS/project.yml` and set `DEVELOPMENT_TEAM` to your team id (Xcode → Settings → Accounts, or
@@ -104,11 +110,11 @@ through its relays when the addresses change). The ticket works once and expires
   state change (start, pause, resume, extend, skip, stop, reset, an event synced from the Mac, block end). Not
   shown while the app is open (the sound plays).
 - **Live Activity**: started, updated and ended from the same state changes, only while the app is in the
-  foreground (ActivityKit starts activities from the foreground). Lock Screen and Dynamic Island show the ring and
+  foreground (ActivityKit starts activities from the foreground). Lock Screen and Dynamic Island show the 3 pt rule and
   `Text(timerInterval:)`, drawn by the system, so the countdown ticks without the app. If a block ends while the
   app is suspended, the activity stays with its finished countdown ("Done") until the app next runs; ending it
   from the background would need a push (APNs), which is not built.
-- **Widget** (small): today's focus time, read from the App Group snapshot the app writes after each state change.
+- **Widget** (small): today's focus time as a serif numeral, with a vermilion dot while a block runs, read from the App Group snapshot the app writes after each state change.
 - **Data** lives in `Application Support/Pomo` (`pomo.db`, `meta/key`), excluded from backups so a restored copy
   never impersonates the original device.
 

@@ -10,17 +10,19 @@ struct LiveActivityTests {
         #expect(c.endsMs == t0 + 10 * min1)
         #expect(c.startMs == t0 + 10 * min1 - 25 * min1)
         #expect(!c.paused && c.label == "write" && c.phaseName == "Focus")
-        #expect(c.progress(at: t0) == 15.0 / 25.0)
-        #expect(c.progress(at: t0 + 10 * min1) == 1)
+        #expect(c.remainingFraction(at: t0) == 10.0 / 25.0)
+        #expect(c.remainingFraction(at: t0 + 10 * min1) == 0)
+        #expect(c.remainingFraction(at: t0 + 60 * min1) == 0, "past the end the rule is empty, never negative")
         #expect(c.staleDate == c.endDate)
         #expect(c.interval.lowerBound < c.interval.upperBound)
     }
 
-    @Test func extendedBlockKeepsTheRingFractionHonest() throws {
+    @Test func extendedBlockKeepsTheRuleLengthHonest() throws {
         // 25 min block, 20 min elapsed, extended by 5: 10 left of 30.
         let c = try #require(LiveActivityPlanner.content(
             timer: timer(.running, planned: 30 * min1, remaining: 10 * min1), nowMs: t0))
-        #expect(abs(c.progress(at: t0) - 20.0 / 30.0) < 1e-9)
+        #expect(abs(c.remainingFraction(at: t0) - 10.0 / 30.0) < 1e-9)
+        #expect(c.interval.upperBound.timeIntervalSince(c.interval.lowerBound) == 30 * 60, "the system-drawn rule spans the whole block")
     }
 
     @Test func pausedBlockFreezesTheCountdown() throws {
@@ -29,7 +31,7 @@ struct LiveActivityTests {
         #expect(c.paused && c.phaseName == "Paused")
         #expect(c.frozenDisplay == "03:05")
         #expect(c.staleDate == nil)
-        #expect(abs(c.progress(at: t0 + 10 * min1) - (1 - 185_000.0 / 300_000.0)) < 1e-9, "paused progress ignores the clock")
+        #expect(abs(c.remainingFraction(at: t0 + 10 * min1) - 185_000.0 / 300_000.0) < 1e-9, "a paused rule ignores the clock")
     }
 
     @Test func idleFinishedAndEmptyLabelsHaveNoContentOrNoLabel() {
@@ -82,6 +84,29 @@ struct TodaySnapshotTests {
         #expect(snap.focusMs(at: snap.dayEndMs) == 0, "the next day starts from zero until the app writes again")
         #expect(snap.nextDayStart(after: now) == Date(timeIntervalSince1970: Double(snap.dayEndMs) / 1000))
         #expect(snap.nextDayStart(after: snap.dayEndMs) == nil)
+    }
+
+    @Test func runningDotFollowsTheBlockAndEndsWithIt() {
+        let now: Int64 = 1_799_841_600_000
+        func snapshot(_ t: TimerState) -> TodaySnapshot {
+            TodaySnapshot(status: Status(nowMs: now, timer: t, today: Today(focusMs: 0, completedFocus: 0)), tzOffsetMin: 0)
+        }
+        let running = snapshot(timer(.running, remaining: 10 * min1))
+        #expect(running.runningUntilMs == now + 10 * min1)
+        #expect(running.isRunning(at: now))
+        #expect(running.isRunning(at: now + 10 * min1 - 1))
+        #expect(!running.isRunning(at: now + 10 * min1), "the dot goes out at the block's end time")
+        let onBreak = snapshot(timer(.running, kind: .shortBreak, remaining: 5 * min1))
+        #expect(onBreak.isRunning(at: now), "any running block, not only focus")
+        #expect(!snapshot(timer(.paused, remaining: 10 * min1)).isRunning(at: now))
+        #expect(!snapshot(timer(.idle)).isRunning(at: now))
+        #expect(!snapshot(timer(.running, remaining: 0)).isRunning(at: now))
+    }
+
+    @Test func snapshotsWrittenBeforeTheRunningDotStillDecode() throws {
+        let old = #"{"dayStartMs":1,"dayEndMs":2,"focusMs":3,"completedFocus":4,"updatedMs":5}"#
+        let s = try JSONDecoder().decode(TodaySnapshot.self, from: Data(old.utf8))
+        #expect(s.runningUntilMs == nil && !s.isRunning(at: 0))
     }
 
     @Test func storeRoundTripsAndDefaultsToEmpty() throws {

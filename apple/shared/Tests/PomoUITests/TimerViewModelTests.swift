@@ -86,7 +86,7 @@ func makeModel(_ api: FakeAPI, clock: Box<Int64> = Box(1_000_000), connector: (@
         clock.value = 1_045_000
         m.tick()
         #expect(m.menuTitle == "00:45")
-        #expect(m.progress > 0.9 && m.progress < 1)
+        #expect(m.countdown.remainingFraction(at: m.nowMs) == 45_000.0 / 1_500_000)
         clock.value = 2_000_000
         m.tick()
         #expect(m.menuTitle == "00:00")

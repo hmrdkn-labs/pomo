@@ -30,6 +30,7 @@ jobs:
   swift:
     name: Swift packages
     runs-on: macos-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - name: Design system and view models
@@ -37,4 +38,4 @@ jobs:
         run: swift test
       - name: Mac app
         working-directory: apple/PomoMac
-        run: swift test
+        run: swift test --verbose

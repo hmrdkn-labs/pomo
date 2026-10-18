@@ -39,6 +39,7 @@ struct TimerScreen: View {
             HStack(spacing: Tokens.Spacing.s) {
                 Image(systemName: timer.glyph.symbol).accessibilityHidden(true)
                 Text(timer.phaseName).font(.system(size: Tokens.TypeSize.body, weight: .semibold))
+                    .accessibilityIdentifier("timer.phase")
                 if let detail = timer.phaseDetail {
                     Text("· \(detail)").foregroundStyle(theme.textMuted)
                 }
@@ -50,6 +51,7 @@ struct TimerScreen: View {
                     .padding(.horizontal, Tokens.Spacing.s).padding(.vertical, Tokens.Spacing.xs)
                     .background(theme.surface, in: Capsule())
                     .foregroundStyle(theme.textMuted)
+                    .accessibilityIdentifier("timer.source")
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: timer.phaseName)
@@ -61,6 +63,7 @@ struct TimerScreen: View {
                 .foregroundStyle(theme.text.opacity(timer.countdown.status == .paused ? 0.55 : 1))
                 .minimumScaleFactor(0.5)
                 .accessibilityLabel(timer.accessibilityTime)
+                .accessibilityIdentifier("timer.countdown")
         }
         .frame(width: 260, height: 260)
 

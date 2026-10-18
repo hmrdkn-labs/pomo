@@ -42,6 +42,35 @@ architecture in that mode, and the Rust library has no x86_64 slice).
 
 A widget-only build: `-scheme PomoWidgets`. A device-SDK build: `-sdk iphoneos -destination 'generic/platform=iOS'`.
 
+## End-to-end UI tests
+
+`Tests/UI` (`PomoUITests`) drives the real app in a simulator against a real `pomod`: timer controls, scanner
+sheet, paste-ticket pairing, Mac ↔ phone sync, revoke, Stats and Settings, the block-end notification banner,
+the Live Activity on the Lock Screen and the Home Screen widget. Tests run in name order and share app data.
+
+```sh
+cargo build -p pomod -p pomo-cli                       # CARGO_TARGET_DIR as you like
+pomod --home /tmp/pomo-ios-e2e --port 0 --sync n0 --name e2e-mac &   # kill it by PID afterwards
+cd apple/PomoiOS && nix run nixpkgs#xcodegen -- generate
+TEST_RUNNER_POMO_E2E_HOME=/tmp/pomo-ios-e2e TEST_RUNNER_POMO_E2E_SHOTS=<dir for screenshots> \
+xcodebuild test -project Pomo.xcodeproj -scheme Pomo -destination 'id=<simulator id>' \
+  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 -only-testing:PomoUITests
+```
+
+The simulator shares the host's loopback and `/tmp`, so the test reads the daemon's port and token from
+`POMO_E2E_HOME` and talks to its HTTP API (`pomo`'s own API) for tickets, Mac-side commands and status checks.
+Start from a clean install (`xcrun simctl uninstall <id> dev.hamardikan.pomo.ios`); the widget test adds one widget
+to the Home Screen per run. Run only one `xcodebuild` at a time.
+
+- Camera states: the scanner test accepts "No camera is available" (default) or "Camera access is off"; get the
+  latter with `xcrun simctl privacy <id> revoke camera dev.hamardikan.pomo.ios` and
+  `-only-testing:PomoUITests/PomoE2ETests/test02a_scannerSheet`.
+- Unsigned builds (`CODE_SIGNING_ALLOWED=NO`) carry no App Group entitlement, so the widget cannot read the
+  app's snapshot and shows zero. To check its data, build ad hoc instead (`CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual
+  CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES`) and add `TEST_RUNNER_POMO_E2E_SIGNED=1`.
+- Lock Screen: the test presses the lock button through the private `pressLockButton` selector; Live Activities ask
+  for permission on first use (the test taps Allow).
+
 ## Install on your iPhone
 
 1. Open `apple/PomoiOS/project.yml` and set `DEVELOPMENT_TEAM` to your team id (Xcode → Settings → Accounts, or

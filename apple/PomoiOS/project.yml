@@ -106,6 +106,8 @@ targets:
     platform: iOS
     sources:
       - path: Tests
+        excludes:
+          - UI/**
     dependencies:
       - target: Pomo
       - package: PomoKit
@@ -120,6 +122,19 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
 
+  PomoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/UI
+    dependencies:
+      - target: Pomo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hamardikan.pomo.ios.uitests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Pomo:
     build:
@@ -129,6 +144,7 @@ schemes:
     test:
       targets:
         - PomoTests
+        - PomoUITests
     run:
       config: Debug
   PomoWidgets:

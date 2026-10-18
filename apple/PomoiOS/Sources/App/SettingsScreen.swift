@@ -29,6 +29,7 @@ struct SettingsScreen: View {
             .scrollContentBackground(.hidden)
             .background(theme.bg)
             .navigationTitle("Settings")
+            .task { await devices.load() }
         }
     }
 }

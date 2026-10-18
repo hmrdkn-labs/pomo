@@ -8,6 +8,7 @@ struct DevicesScreen: View {
     @Environment(\.colorScheme) private var scheme
     @State private var scanning = false
     @State private var confirmRevoke: DeviceInfo?
+    @FocusState private var ticketFocused: Bool
 
     private var theme: Theme { Theme(scheme) }
 
@@ -85,16 +86,20 @@ struct DevicesScreen: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.system(size: Tokens.TypeSize.secondary, design: .monospaced))
+                .accessibilityIdentifier("devices.ticket")
+                .focused($ticketFocused)
             if !devices.joinTicket.isEmpty {
-                Button { Task { await devices.join() } } label: {
+                Button { ticketFocused = false; Task { await devices.join() } } label: {
                     if devices.isJoining { ProgressView() } else { Text("Pair") }
                 }
                 .disabled(!devices.canJoin)
                 .frame(minHeight: 44)
+                .accessibilityIdentifier("devices.pair")
             }
             if let m = devices.joinMessage {
                 Text(m).font(.system(size: Tokens.TypeSize.secondary))
                     .foregroundStyle(devices.joinFailed ? theme.danger : theme.focus)
+                    .accessibilityIdentifier("devices.joinMessage")
             }
         } header: {
             Text("Pair another device")
@@ -177,6 +182,10 @@ private struct ScannerSheet: View {
             .navigationTitle("Scan to pair")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { isPresented = false } } }
+            // The preview is black or a camera feed: keep the status pill and Cancel legible in either appearance.
+            .preferredColorScheme(.dark)
+            .foregroundStyle(.white)
+            .tint(.white)
         }
     }
 }

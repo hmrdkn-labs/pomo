@@ -1,0 +1,31 @@
+[package]
+name = "pomod"
+version = "0.1.0"
+edition = "2021"
+description = "Pomo Daemon: local HTTP agent API over the Core store"
+
+[lib]
+name = "pomod"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pomod"
+path = "src/main.rs"
+
+[dependencies]
+pomo-core = { path = "../core" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
+rand = "0.8"
+subtle = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"
+tempfile = "3"

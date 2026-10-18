@@ -1,0 +1,298 @@
+{
+  "name": "stats-streak",
+  "description": "streak ends today or yesterday, stops at a day without a completed focus block, and is 0 when neither today nor yesterday has one",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1768035600000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1768122000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "kind": "focus",
+        "planned_ms": 300000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1768208400000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000003",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1768208520000,
+      "hlc_counter": 0,
+      "type": "timer.skipped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000003"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "device_id": "mac",
+      "seq": 5,
+      "hlc_ms": 1768294800000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000004",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "device_id": "mac",
+      "seq": 6,
+      "hlc_ms": 1768381200000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000005",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1768384800000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "long_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 120000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ],
+      "stats": {
+        "tz_offset_min": 0,
+        "focus_ms_by_day": {
+          "2026-01-10": 600000,
+          "2026-01-11": 300000,
+          "2026-01-12": 120000,
+          "2026-01-13": 600000,
+          "2026-01-14": 600000
+        },
+        "completed_focus": 4,
+        "streak_days": 2
+      }
+    },
+    {
+      "now_ms": 1768478400000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "long_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 120000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ],
+      "stats": {
+        "tz_offset_min": 0,
+        "focus_ms_by_day": {
+          "2026-01-10": 600000,
+          "2026-01-11": 300000,
+          "2026-01-12": 120000,
+          "2026-01-13": 600000,
+          "2026-01-14": 600000
+        },
+        "completed_focus": 4,
+        "streak_days": 2
+      }
+    },
+    {
+      "now_ms": 1768564800000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "long_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 120000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000005",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ],
+      "stats": {
+        "tz_offset_min": 0,
+        "focus_ms_by_day": {
+          "2026-01-10": 600000,
+          "2026-01-11": 300000,
+          "2026-01-12": 120000,
+          "2026-01-13": 600000,
+          "2026-01-14": 600000
+        },
+        "completed_focus": 4,
+        "streak_days": 0
+      }
+    }
+  ]
+}

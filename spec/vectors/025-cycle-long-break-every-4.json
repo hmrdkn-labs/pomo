@@ -1,0 +1,164 @@
+{
+  "name": "cycle-long-break-every-4",
+  "description": "after 3 completed focus blocks the suggestion is short_break, after 4 it is long_break",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000600000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1700001200000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000003",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1700001800000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000004",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700001800000,
+      "timer": {
+        "status": "running",
+        "block_id": "10000000-0000-4000-8000-000000000004",
+        "remaining_ms": 600000,
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "running"
+        }
+      ]
+    },
+    {
+      "now_ms": 1700002400000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "long_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ]
+    }
+  ]
+}

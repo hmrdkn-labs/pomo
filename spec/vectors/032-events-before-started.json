@@ -1,0 +1,110 @@
+{
+  "name": "events-before-started",
+  "description": "events listed before their timer.started, and events for a block whose timer.started is unknown: the fold uses the total order, and the unknown block stays unknown",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "device_id": "mac",
+      "seq": 6,
+      "hlc_ms": 1700000500000,
+      "hlc_counter": 0,
+      "type": "timer.skipped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1700000350000,
+      "hlc_counter": 0,
+      "type": "timer.paused",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "device_id": "mac",
+      "seq": 5,
+      "hlc_ms": 1700000450000,
+      "hlc_counter": 0,
+      "type": "timer.stopped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1700000400000,
+      "hlc_counter": 0,
+      "type": "timer.resumed",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000300000,
+      "hlc_counter": 0,
+      "type": "timer.paused",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000200000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000600000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 200000,
+          "phase": "ended"
+        }
+      ]
+    }
+  ]
+}

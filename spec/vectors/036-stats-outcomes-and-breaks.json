@@ -1,0 +1,177 @@
+{
+  "name": "stats-outcomes-and-breaks",
+  "description": "skipped and abandoned focus blocks count their elapsed_ms toward focus_ms but not toward completed_focus; a break block is excluded and its day is not listed",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1768467600000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1768467800000,
+      "hlc_counter": 0,
+      "type": "timer.skipped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1768471200000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1768471300000,
+      "hlc_counter": 0,
+      "type": "timer.paused",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "device_id": "mac",
+      "seq": 5,
+      "hlc_ms": 1768471600000,
+      "hlc_counter": 0,
+      "type": "timer.stopped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "device_id": "mac",
+      "seq": 6,
+      "hlc_ms": 1768474800000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000003",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000007",
+      "device_id": "mac",
+      "seq": 7,
+      "hlc_ms": 1768640400000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000004",
+        "kind": "short_break",
+        "planned_ms": 300000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000008",
+      "device_id": "mac",
+      "seq": 8,
+      "hlc_ms": 1768640550000,
+      "hlc_counter": 0,
+      "type": "timer.skipped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000004"
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1768694400000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 200000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "abandoned",
+          "elapsed_ms": 100000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "short_break",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 150000,
+          "phase": "ended"
+        }
+      ],
+      "stats": {
+        "tz_offset_min": 0,
+        "focus_ms_by_day": {
+          "2026-01-15": 900000
+        },
+        "completed_focus": 1,
+        "streak_days": 0
+      }
+    }
+  ]
+}

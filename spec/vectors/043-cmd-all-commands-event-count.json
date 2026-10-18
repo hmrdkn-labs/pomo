@@ -1,0 +1,102 @@
+{
+  "name": "every-command-writes-exactly-one-event",
+  "device_id": "mac",
+  "steps": [
+    {
+      "now_ms": 1000,
+      "command": {
+        "type": "start",
+        "kind": "focus",
+        "planned_ms": 60000,
+        "command_key": "k1"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 2000,
+      "command": {
+        "type": "pause",
+        "command_key": "k2"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 3000,
+      "command": {
+        "type": "resume",
+        "command_key": "k3"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 4000,
+      "command": {
+        "type": "extend",
+        "add_ms": 1000,
+        "command_key": "k4"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 5000,
+      "command": {
+        "type": "reset",
+        "command_key": "k5"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 6000,
+      "command": {
+        "type": "skip",
+        "command_key": "k6"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 7000,
+      "command": {
+        "type": "start",
+        "kind": "short_break",
+        "planned_ms": 300000,
+        "command_key": "k7"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 8000,
+      "command": {
+        "type": "pause",
+        "command_key": "k8"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 9000,
+      "command": {
+        "type": "stop",
+        "command_key": "k9"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 10000,
+      "command": {
+        "type": "label",
+        "label": "post",
+        "command_key": "k10"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 11000,
+      "command": {
+        "type": "extend",
+        "add_ms": 1000,
+        "command_key": "k11"
+      },
+      "expect": "error"
+    }
+  ],
+  "final_event_count": 10
+}

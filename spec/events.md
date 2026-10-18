@@ -109,3 +109,12 @@ A Command is a request that the Core validates against the current state at wall
 | `label(block_id?, label, project?)` | `block_id` known (default: current, else the most recent block) | `block.labeled` |
 
 A Command carries an idempotency key. Issuing a Command whose `(device_id, command_key)` was already used returns the originally produced events and writes nothing. An invalid Command returns an error and writes nothing.
+
+## Clarifications
+
+Settled after the first independent implementation and independent vectors agreed on everything else.
+
+1. **`now` is never earlier than the log.** Reading state uses `max(now, largest hlc_ms in the log)`. Clock skew can put an event's `hlc_ms` ahead of the reader's clock; this keeps `remaining_ms` within `[0, planned_ms]`.
+2. **Live blocks in statistics.** Statistics use each block's `elapsed_ms` as stored by the fold, so a running or paused block counts only the time before its last pause or resume, and counts fully once it ends. Callers that want a running total add `now - phase_since_ms` themselves; the API's `today.focus_ms` does not.
+3. **Streak "today".** Statistics take `now_ms` as an input; "today" is the calendar day of `now_ms` in the caller's offset.
+4. **`next_kind` while a block is live.** It is computed from ended blocks only, as in the Cycle section; clients show it only when the timer is idle.

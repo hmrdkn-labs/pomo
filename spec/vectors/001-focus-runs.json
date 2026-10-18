@@ -1,0 +1,68 @@
+{
+  "name": "focus-runs",
+  "description": "a focus block runs; remaining_ms ticks down from planned_ms",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 1500000,
+        "label": "spec"
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000000000,
+      "timer": {
+        "status": "running",
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "remaining_ms": 1500000,
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": "spec",
+          "project": null,
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "running"
+        }
+      ]
+    },
+    {
+      "now_ms": 1700000600000,
+      "timer": {
+        "status": "running",
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "remaining_ms": 900000,
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": "spec",
+          "project": null,
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "running"
+        }
+      ]
+    }
+  ]
+}

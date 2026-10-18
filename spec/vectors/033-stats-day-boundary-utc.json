@@ -1,0 +1,206 @@
+{
+  "name": "stats-day-boundary-utc",
+  "description": "started_ms decides the calendar day: 23:00Z and 01:00Z fall on different UTC days",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1768518000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1768518300000,
+      "hlc_counter": 0,
+      "type": "timer.skipped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1768525200000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1768525400000,
+      "hlc_counter": 0,
+      "type": "timer.skipped",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "device_id": "mac",
+      "seq": 5,
+      "hlc_ms": 1768528800000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000003",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "device_id": "mac",
+      "seq": 6,
+      "hlc_ms": 1768532400000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000004",
+        "kind": "focus",
+        "planned_ms": 300000
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1768533000000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 200000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        }
+      ],
+      "stats": {
+        "tz_offset_min": 0,
+        "focus_ms_by_day": {
+          "2026-01-15": 300000,
+          "2026-01-16": 1100000
+        },
+        "completed_focus": 2,
+        "streak_days": 1
+      }
+    },
+    {
+      "now_ms": 1768608000000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "skipped",
+          "elapsed_ms": 200000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000003",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000004",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 300000,
+          "phase": "ended"
+        }
+      ],
+      "stats": {
+        "tz_offset_min": 0,
+        "focus_ms_by_day": {
+          "2026-01-15": 300000,
+          "2026-01-16": 1100000
+        },
+        "completed_focus": 2,
+        "streak_days": 1
+      }
+    }
+  ]
+}

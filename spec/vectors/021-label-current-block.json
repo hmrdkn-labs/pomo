@@ -1,0 +1,64 @@
+{
+  "name": "label-current-block",
+  "description": "block.labeled applies to the current running block and overwrites label and project",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 1500000,
+        "label": "alpha",
+        "project": "p1"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000100000,
+      "hlc_counter": 0,
+      "type": "block.labeled",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "label": "beta",
+        "project": "p2"
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000200000,
+      "timer": {
+        "status": "running",
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "remaining_ms": 1300000,
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": "beta",
+          "project": "p2",
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "running"
+        }
+      ]
+    }
+  ]
+}

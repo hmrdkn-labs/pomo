@@ -1,0 +1,77 @@
+{
+  "name": "extend-after-completion-ignored",
+  "description": "an extend arriving after the block already completed is ignored: elapsed stays 600000, not 900000",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000700000,
+      "hlc_counter": 0,
+      "type": "timer.extended",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "add_ms": 300000
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000800000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ]
+    },
+    {
+      "now_ms": 1700086400000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ]
+    }
+  ]
+}

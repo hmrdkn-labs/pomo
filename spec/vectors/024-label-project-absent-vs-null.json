@@ -1,0 +1,118 @@
+{
+  "name": "label-project-absent-vs-null",
+  "description": "a labeled event without a project key keeps the project (B); a present project null clears it (A)",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 100000,
+        "label": "a",
+        "project": "p1"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000100000,
+      "hlc_counter": 0,
+      "type": "block.labeled",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "label": "a2"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1700000300000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "kind": "focus",
+        "planned_ms": 600000,
+        "label": "b",
+        "project": "p2"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1700000400000,
+      "hlc_counter": 0,
+      "type": "block.labeled",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "label": "b2"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "device_id": "mac",
+      "seq": 5,
+      "hlc_ms": 1700000450000,
+      "hlc_counter": 0,
+      "type": "block.labeled",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "label": "a3",
+        "project": null
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000500000,
+      "timer": {
+        "status": "running",
+        "block_id": "10000000-0000-4000-8000-000000000002",
+        "remaining_ms": 400000,
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": "a3",
+          "project": null,
+          "outcome": "completed",
+          "elapsed_ms": 100000,
+          "phase": "ended"
+        },
+        {
+          "id": "10000000-0000-4000-8000-000000000002",
+          "kind": "focus",
+          "label": "b2",
+          "project": "p2",
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "running"
+        }
+      ]
+    }
+  ]
+}

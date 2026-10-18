@@ -1,0 +1,19 @@
+{
+  "name": "cycle-empty-log",
+  "description": "with no events the timer is idle and suggests focus",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000000000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "focus"
+      },
+      "blocks": []
+    }
+  ]
+}

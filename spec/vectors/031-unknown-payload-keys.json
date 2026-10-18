@@ -1,0 +1,133 @@
+{
+  "name": "unknown-payload-keys",
+  "description": "unknown keys inside payload are preserved and ignored: the state is the same as without them",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000000000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 600000,
+        "note": "hi",
+        "n": 3,
+        "nested": {
+          "a": [
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000100000,
+      "hlc_counter": 0,
+      "type": "timer.paused",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "why": "coffee"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "device_id": "mac",
+      "seq": 3,
+      "hlc_ms": 1700000300000,
+      "hlc_counter": 0,
+      "type": "timer.resumed",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "why": null
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "device_id": "mac",
+      "seq": 4,
+      "hlc_ms": 1700000400000,
+      "hlc_counter": 0,
+      "type": "block.labeled",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "label": "x",
+        "project": "p1"
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "device_id": "mac",
+      "seq": 5,
+      "hlc_ms": 1700000450000,
+      "hlc_counter": 0,
+      "type": "block.labeled",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "label": "x",
+        "project": "p1",
+        "extra": "ignored"
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000500000,
+      "timer": {
+        "status": "running",
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "remaining_ms": 300000,
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": "x",
+          "project": "p1",
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "running"
+        }
+      ]
+    },
+    {
+      "now_ms": 1700000800000,
+      "timer": {
+        "status": "idle",
+        "next_kind": "short_break"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": "x",
+          "project": "p1",
+          "outcome": "completed",
+          "elapsed_ms": 600000,
+          "phase": "ended"
+        }
+      ]
+    }
+  ]
+}

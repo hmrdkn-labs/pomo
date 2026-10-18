@@ -1,0 +1,57 @@
+# pomo-sync
+
+Peer-to-peer Sync over [iroh](https://docs.iroh.computer/) (`iroh = 1.3.0`, `iroh-tickets = 1.0.0`), implementing `spec/sync.md`.
+Builds on `pomo-core`; the Core is not modified.
+
+## Use
+
+```rust
+use pomo_sync::{SyncNode, SyncOptions};
+
+// Opens <db dir>/meta/key (created with mode 600) and the store with the key's endpoint id
+// as device_id, then starts the listener for ALPN `pomo/sync/1`.
+let node = SyncNode::open("/path/to/pomo.db", SyncOptions::default()).await?;
+node.device_id();                                   // endpoint id (hex) == store device_id
+
+// Pairing: device A offers, device B joins (one session runs right after).
+let ticket = node_a.pairing_ticket("laptop").await?; // "pomo-pair:<base64url json>", 5 min, one use
+let out = node_b.pair(&ticket, "phone").await?;      // PairOutcome { device_id, name, sync }
+
+// Later sessions, by device id (address remembered from the ticket / n0 address lookup)
+// or by an endpoint ticket (`node.endpoint_ticket().await`).
+let report = node_b.sync_with(&out.device_id).await?; // SyncReport { sent, received, live, .. }
+
+node.set_live(true);                 // keep sessions open and forward new events (Daemon / foreground)
+let mut rx = node.subscribe();       // Vec<Event> per frame newly stored from peers (for SSE)
+node.apply(cmd, source, now_ms)?;    // store.apply + forward to live peers
+node.notify();                       // call after writing to the store directly
+node.revoke(&device_id)?;            // closes its sessions, rejects it from now on
+node.shutdown().await;
+```
+
+Lower level: `open_store(db_path, key_path)` returns the `Store` and `SecretKey` (device id = key's endpoint id);
+`SyncNode::start(store, db_path, key, opts)` takes an `Arc<Mutex<Store>>` the caller also uses for commands.
+`pomo_sync::wire` exposes the frame codec.
+
+## Options (`SyncOptions`)
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `network` | `N0` | `N0`: iroh N0 preset (default n0 relays, n0 address lookup). `Local`: loopback only, no relay, no lookup; peers are reached through ticket addresses (`SyncOptions::local()`). |
+| `live` | false | initial live flag |
+| `ticket_ttl` | 5 min | pairing ticket validity |
+| `events_per_frame` | 500 | at most 500 |
+| `ping_interval` / `idle_timeout` | 20 s / 60 s | live-mode ping, silent-session limit |
+| `drop_after_frames` | none | test hook: once, drop the connection before event frame n+1 |
+
+## Behaviour notes
+
+- Trust lives in the store's `devices` table (`paired`, `revoked`), written through a second SQLite connection to the same file because Core has no API for it.
+- Re-pairing a revoked device with a valid ticket clears the revocation.
+- A session ends with `bye` unless the local side is live. A live session ends when the peer says `bye`, the connection drops, or `set_live(false)`. Sessions are not re-dialed automatically; call `sync_with` again.
+- Received frames are checked before storing: a `(device_id, seq)` conflict aborts the session and stores nothing from the frame; a `seq` gap drops that device's events from the frame and aborts; events of our own device beyond what we issued abort.
+- The pairing secret is 16 random bytes, base64url without padding.
+
+## Tests
+
+`cargo test -p pomo-sync` runs everything locally (loopback, no relay). `cargo test -p pomo-sync -- --ignored` additionally pairs and syncs through the real n0 relays (needs internet).

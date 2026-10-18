@@ -1,0 +1,65 @@
+{
+  "name": "start-is-idempotent",
+  "device_id": "mac",
+  "steps": [
+    {
+      "now_ms": 1000,
+      "command": {
+        "type": "start",
+        "kind": "focus",
+        "planned_ms": 60000,
+        "command_key": "k1"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 2000,
+      "command": {
+        "type": "start",
+        "kind": "focus",
+        "planned_ms": 60000,
+        "command_key": "k1"
+      },
+      "expect": "ok",
+      "same_events_as_step": 0
+    },
+    {
+      "now_ms": 3000,
+      "command": {
+        "type": "pause",
+        "command_key": "k2"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 4000,
+      "command": {
+        "type": "pause",
+        "command_key": "k3"
+      },
+      "expect": "error"
+    },
+    {
+      "now_ms": 5000,
+      "command": {
+        "type": "start",
+        "kind": "focus",
+        "planned_ms": 60000,
+        "command_key": "k4"
+      },
+      "expect": "ok"
+    },
+    {
+      "now_ms": 6000,
+      "command": {
+        "type": "start",
+        "kind": "focus",
+        "planned_ms": 60000,
+        "command_key": "k4"
+      },
+      "expect": "ok",
+      "same_events_as_step": 4
+    }
+  ],
+  "final_event_count": 3
+}

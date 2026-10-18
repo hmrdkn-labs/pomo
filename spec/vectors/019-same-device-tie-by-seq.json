@@ -1,0 +1,60 @@
+{
+  "name": "same-device-tie-by-seq",
+  "description": "two events from one device with identical hlc_ms and hlc_counter; seq breaks the tie, so the start is applied before the pause",
+  "config": {
+    "long_break_every": 4
+  },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "device_id": "mac",
+      "seq": 1,
+      "hlc_ms": 1700000100000,
+      "hlc_counter": 0,
+      "type": "timer.started",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "kind": "focus",
+        "planned_ms": 300000
+      },
+      "source": "user",
+      "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "device_id": "mac",
+      "seq": 2,
+      "hlc_ms": 1700000100000,
+      "hlc_counter": 0,
+      "type": "timer.paused",
+      "payload": {
+        "block_id": "10000000-0000-4000-8000-000000000001"
+      },
+      "source": "user",
+      "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000200000,
+      "timer": {
+        "status": "paused",
+        "block_id": "10000000-0000-4000-8000-000000000001",
+        "remaining_ms": 300000,
+        "next_kind": "focus"
+      },
+      "blocks": [
+        {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "kind": "focus",
+          "label": null,
+          "project": null,
+          "outcome": null,
+          "elapsed_ms": null,
+          "phase": "paused"
+        }
+      ]
+    }
+  ]
+}

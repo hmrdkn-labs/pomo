@@ -78,6 +78,10 @@ public struct Status: Codable, Equatable, Sendable {
 public struct CommandResult: Codable, Equatable, Sendable {
     public var timer: TimerState
     public var replayed: Bool
+
+    public init(timer: TimerState, replayed: Bool) {
+        self.timer = timer; self.replayed = replayed
+    }
 }
 
 public struct StatGroup: Codable, Equatable, Sendable, Identifiable {
@@ -152,6 +156,10 @@ public struct APIError: Error, Equatable, Sendable, LocalizedError {
     public var code: String
     public var message: String
     public var errorDescription: String? { message }
+
+    public init(status: Int, code: String, message: String) {
+        self.status = status; self.code = code; self.message = message
+    }
 }
 
 public enum ConnectionError: Error, Equatable, Sendable, LocalizedError {
@@ -165,3 +173,52 @@ public enum ConnectionError: Error, Equatable, Sendable, LocalizedError {
         }
     }
 }
+
+// MARK: Devices and sync
+
+public struct DeviceInfo: Codable, Equatable, Sendable, Identifiable {
+    public var deviceId: String
+    public var name: String
+    public var paired: Bool
+    public var revoked: Bool
+    public var id: String { deviceId }
+
+    public init(deviceId: String, name: String, paired: Bool = true, revoked: Bool = false) {
+        self.deviceId = deviceId; self.name = name; self.paired = paired; self.revoked = revoked
+    }
+}
+
+public struct DevicesList: Codable, Equatable, Sendable {
+    public var deviceId: String
+    public var name: String
+    public var devices: [DeviceInfo]
+
+    public init(deviceId: String, name: String, devices: [DeviceInfo] = []) {
+        self.deviceId = deviceId; self.name = name; self.devices = devices
+    }
+}
+
+public struct PairOffer: Codable, Equatable, Sendable {
+    public var ticket: String
+    /// Absolute expiry, ms since the epoch.
+    public var expiresMs: Int64
+
+    public init(ticket: String, expiresMs: Int64) { self.ticket = ticket; self.expiresMs = expiresMs }
+}
+
+/// One entry of a `POST /v1/sync` response: counts on success, `error` on a per-peer failure.
+public struct PeerSync: Codable, Equatable, Sendable, Identifiable {
+    public var deviceId: String
+    public var sent: Int?
+    public var received: Int?
+    public var error: String?
+    public var id: String { deviceId }
+
+    public init(deviceId: String, sent: Int? = nil, received: Int? = nil, error: String? = nil) {
+        self.deviceId = deviceId; self.sent = sent; self.received = received; self.error = error
+    }
+}
+
+struct PairJoinResponse: Codable { var device: DeviceInfo }
+struct RevokeResponse: Codable { var device: DeviceInfo }
+struct SyncResponse: Codable { var synced: [PeerSync] }

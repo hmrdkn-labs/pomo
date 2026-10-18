@@ -1,0 +1,33 @@
+[package]
+name = "pomo-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "Pomo FFI: the Core and Sync node behind UniFFI, for the Apple Shells"
+
+[lib]
+name = "pomo_ffi"
+crate-type = ["staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+pomo-core = { path = "../core" }
+pomo-sync = { path = "../sync" }
+uniffi = "0.32"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+serde_json = "1"
+rand = "0.8"
+thiserror = "2"
+# Pin: libc 0.2.190+ drops the iOS route constants netwatch (iroh) needs, so aarch64-apple-ios stops
+# building. Not used directly. Lift the pin once netwatch builds against current libc.
+libc = "=0.2.189"
+
+[dev-dependencies]
+tempfile = "3"
+futures = "0.3"

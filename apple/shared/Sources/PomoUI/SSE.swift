@@ -3,6 +3,10 @@ import Foundation
 public struct SSEMessage: Equatable, Sendable {
     public var event: String
     public var data: String
+
+    public init(event: String, data: String) {
+        self.event = event; self.data = data
+    }
 }
 
 /// Incremental parser for `text/event-stream`. Feed one line at a time (without the line terminator).

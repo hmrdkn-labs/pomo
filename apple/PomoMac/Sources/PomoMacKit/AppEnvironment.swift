@@ -10,6 +10,9 @@ public final class AppEnvironment {
     public let notifier = Notifier()
     public let timer: TimerViewModel
     public let stats: StatsViewModel
+    public let devices: DevicesViewModel
+    public private(set) var shortcuts: ShortcutsModel!
+    private var hotKeys: CarbonHotKeys?
 
     public init(launcher: DaemonLauncher = DaemonLauncher(), defaults: UserDefaults = .standard) {
         self.launcher = launcher
@@ -18,11 +21,21 @@ public final class AppEnvironment {
         let connector: @Sendable () async throws -> any PomoAPI = { try await launcher.connect() }
         timer = TimerViewModel(settings: settings, connector: connector)
         stats = StatsViewModel(connector: connector)
+        devices = DevicesViewModel(connector: { try await launcher.connect() })
         timer.onWillStart = { [notifier] in notifier.requestAuthorizationIfNeeded() }
         timer.onBlockEnd = { [notifier] notice in
             notifier.blockEnded(notice)
             AccessibilityNotification.Announcement("\(notice.kind.title) finished").post()
         }
+        let hotKeys = CarbonHotKeys { [weak timer] action in
+            guard let timer else { return }
+            switch action {
+            case .toggle: Task { await timer.togglePause() }
+            case .skip: Task { await timer.skip() }
+            }
+        }
+        self.hotKeys = hotKeys
+        shortcuts = ShortcutsModel(store: ShortcutStore(defaults: defaults), registrar: hotKeys)
         applyDockPolicy()
         timer.connect()
     }

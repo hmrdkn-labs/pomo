@@ -17,7 +17,16 @@ public protocol PomoAPI: Sendable {
     func stream() -> AsyncThrowingStream<StreamEvent, Error>
 }
 
-public struct PomoClient: PomoAPI {
+/// The Devices and sync part of the Daemon API (`spec/api.md`, "Devices and sync").
+public protocol DevicesAPI: Sendable {
+    func devices() async throws -> DevicesList
+    func pairOffer() async throws -> PairOffer
+    func pairJoin(ticket: String, name: String?) async throws -> DeviceInfo
+    func sync(deviceId: String?) async throws -> [PeerSync]
+    func revoke(deviceId: String) async throws -> DeviceInfo
+}
+
+public struct PomoClient: PomoAPI, DevicesAPI {
     public let config: DaemonConfig
     private let session: URLSession
 
@@ -115,6 +124,37 @@ public struct PomoClient: PomoAPI {
         if let toMs { q.append(URLQueryItem(name: "to_ms", value: String(toMs))) }
         if let limit { q.append(URLQueryItem(name: "limit", value: String(limit))) }
         return try await perform(request("/v1/blocks", query: q), as: BlocksResponse.self).blocks
+    }
+
+    private func post(_ path: String, body: [String: Any]) throws -> URLRequest {
+        var r = request(path, method: "POST")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return r
+    }
+
+    public func devices() async throws -> DevicesList {
+        try await perform(request("/v1/devices"), as: DevicesList.self)
+    }
+
+    public func pairOffer() async throws -> PairOffer {
+        try await perform(post("/v1/pair/offer", body: [:]), as: PairOffer.self)
+    }
+
+    public func pairJoin(ticket: String, name: String?) async throws -> DeviceInfo {
+        var body: [String: Any] = ["ticket": ticket]
+        if let name, !name.isEmpty { body["name"] = name }
+        return try await perform(post("/v1/pair/join", body: body), as: PairJoinResponse.self).device
+    }
+
+    public func sync(deviceId: String?) async throws -> [PeerSync] {
+        var body: [String: Any] = [:]
+        if let deviceId { body["device_id"] = deviceId }
+        return try await perform(post("/v1/sync", body: body), as: SyncResponse.self).synced
+    }
+
+    public func revoke(deviceId: String) async throws -> DeviceInfo {
+        try await perform(post("/v1/devices/\(deviceId)/revoke", body: [:]), as: RevokeResponse.self).device
     }
 
     public func stream() -> AsyncThrowingStream<StreamEvent, Error> {

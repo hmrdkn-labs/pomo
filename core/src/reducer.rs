@@ -15,6 +15,8 @@ pub struct State {
     ended_order: Vec<String>,
     /// Block ids touched since the last [`State::take_dirty`].
     dirty: Vec<String>,
+    /// Largest `hlc_ms` applied so far; reads never use an earlier `now`.
+    last_ms: i64,
 }
 
 /// Folds events, which must already be in total order (see [`sort_events`]).
@@ -35,12 +37,14 @@ impl State {
             current: None,
             ended_order: Vec::new(),
             dirty: Vec::new(),
+            last_ms: i64::MIN,
         }
     }
 
     /// Applies the next event in total order. Events that do not apply are ignored.
     pub fn apply(&mut self, ev: &Event) {
         let t = ev.hlc_ms;
+        self.last_ms = self.last_ms.max(t);
         self.settle(t);
         let Some(p) = ev.parse_payload() else { return };
         match p {
@@ -186,6 +190,7 @@ impl State {
 
     /// Reads state at `now`: settles once more, returns the timer and all blocks ordered by `(started_ms, id)`.
     pub fn at(&self, now_ms: i64) -> (TimerView, Vec<Block>) {
+        let now_ms = now_ms.max(self.last_ms);
         let mut blocks = self.blocks_sorted();
         let cur = self.current.as_ref().and_then(|id| self.blocks.get(id));
         let settled = cur.and_then(|b| b.settled_at(now_ms));

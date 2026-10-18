@@ -1,0 +1,20 @@
+{
+  "name": "now-before-log",
+  "description": "A reader whose clock is behind the log reads state at the log's latest hlc_ms (events.md Clarifications 1)",
+  "config": { "long_break_every": 4 },
+  "events": [
+    { "id": "00000000-0000-4000-8000-000000005001", "device_id": "mac", "seq": 1, "hlc_ms": 1000000, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "b1", "kind": "focus", "planned_ms": 600000 }, "source": "user", "command_key": null },
+    { "id": "00000000-0000-4000-8000-000000005002", "device_id": "mac", "seq": 2, "hlc_ms": 1100000, "hlc_counter": 0, "type": "timer.paused",
+      "payload": { "block_id": "b1" }, "source": "user", "command_key": null },
+    { "id": "00000000-0000-4000-8000-000000005003", "device_id": "mac", "seq": 3, "hlc_ms": 1200000, "hlc_counter": 0, "type": "timer.resumed",
+      "payload": { "block_id": "b1" }, "source": "user", "command_key": null }
+  ],
+  "order_independent": true,
+  "checks": [
+    { "now_ms": 1000, "timer": { "status": "running", "block_id": "b1", "remaining_ms": 500000, "next_kind": "focus" },
+      "blocks": [ { "id": "b1", "kind": "focus", "label": null, "project": null, "outcome": null, "elapsed_ms": null, "phase": "running" } ] },
+    { "now_ms": 1200000, "timer": { "status": "running", "block_id": "b1", "remaining_ms": 500000, "next_kind": "focus" },
+      "blocks": [ { "id": "b1", "kind": "focus", "label": null, "project": null, "outcome": null, "elapsed_ms": null, "phase": "running" } ] }
+  ]
+}

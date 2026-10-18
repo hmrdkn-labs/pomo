@@ -49,3 +49,7 @@ func eventuallyOnMain(timeout: Duration = .seconds(10), _ condition: @MainActor 
     }
     return condition()
 }
+
+/// Minutes in ms. (`optionalInt64 == 30 * 60_000` inside `#expect` evaluates false on this toolchain, so
+/// compare against a typed value.)
+func ms(_ minutes: Int64) -> Int64 { minutes * 60_000 }

@@ -24,11 +24,31 @@ Events are ordered by the tuple `(hlc_ms, hlc_counter, device_id, seq)`, compare
 
 ### HLC rule for issuing
 
-When a Device issues an event at wall time `now`: let `last` be the greatest `(hlc_ms, hlc_counter)` it has stored or seen. If `now > last.hlc_ms`, use `(now, 0)`. Otherwise use `(last.hlc_ms, last.hlc_counter + 1)`. The event's effective time in the rules below is `hlc_ms`.
+When a Device issues an event at wall time `now`: let `last` be the greatest `(hlc_ms, hlc_counter)` it has stored (events it rejected or skipped never count). If `now > last.hlc_ms`, use `(now, 0)`. Otherwise use `(last.hlc_ms, last.hlc_counter + 1)`; if that counter would exceed the bound in "Validity bounds", use `(last.hlc_ms + 1, 0)` instead. Arithmetic never wraps. The event's effective time in the rules below is `hlc_ms`.
 
 ### Ingestion
 
 Ingesting an event whose `id` is already stored is a no-op. Ingesting an event whose `(device_id, seq)` exists with a different `id` is an error (corrupt peer); reject it and do not store it.
+
+An event that fails the "Validity bounds" is rejected as invalid and never stored. A Device never stores an event after a rejected one from the same Device in the same batch, so the stored `seq` run of a Device has no holes: a batch with an invalid event is rejected as a whole when ingested atomically (Sync), and otherwise stops that Device at its first invalid event.
+
+A peer's event whose `hlc_ms` is more than 86_400_000 ms (24 h) ahead of the receiver's wall clock is skipped, not stored: the receiver reports it as `future`, skips that Device's later events in the same batch too (no holes), and the sender's version-vector entry does not advance, so the event is offered again at the next sync and accepted once the receiver's clock has caught up. This rule depends on the receiver's clock, so it is not part of the reducer and has no test vector.
+
+### Validity bounds
+
+Checked identically when an event is ingested and when a local Command issues it (a local event that fails them makes the Command fail with an invalid-argument error and writes nothing):
+
+| Field | Bound |
+| --- | --- |
+| `id` | lowercase hyphenated UUID (`8-4-4-4-12` hex digits, `0-9a-f`) |
+| `device_id`, `command_key`, `source` | each at most 128 bytes (`device_id` and `command_key` also non-empty when present) |
+| `payload` | a JSON object, at most 16 KiB as compact JSON |
+| `hlc_ms` | `0 <= hlc_ms <= 4102444800000` (2100-01-01T00:00:00Z) |
+| `hlc_counter` | `0 <= hlc_counter <= 1_000_000` |
+| `seq` | `1 <= seq <= 2^53` |
+| `timer.started.planned_ms`, `timer.extended.add_ms` | when present as an integer, in `1..=86_400_000` (24 h) |
+
+A payload that is merely malformed (a missing or non-integer `planned_ms`, an unknown type) is still valid: it is stored and ignored by the reducer, as before. A block's total `planned_ms` (initial plus extensions) never exceeds 172_800_000 (48 h): see rule 5. All reducer arithmetic is saturating, so no stored event can overflow.
 
 ## Event types
 
@@ -36,10 +56,10 @@ Ingesting an event whose `id` is already stored is a no-op. Ingesting an event w
 
 | Type | Payload | Meaning |
 | --- | --- | --- |
-| `timer.started` | `block_id`, `kind` (`focus` \| `short_break` \| `long_break`), `planned_ms` (>0), `label` (string, optional), `project` (string, optional) | Starts a new block, running from `hlc_ms`. |
+| `timer.started` | `block_id`, `kind` (`focus` \| `short_break` \| `long_break`), `planned_ms` (1..=86_400_000), `label` (string, optional), `project` (string, optional) | Starts a new block, running from `hlc_ms`. |
 | `timer.paused` | `block_id` | Pauses the block. |
 | `timer.resumed` | `block_id` | Resumes a paused block. |
-| `timer.extended` | `block_id`, `add_ms` (>0) | Adds time to the block. |
+| `timer.extended` | `block_id`, `add_ms` (1..=86_400_000) | Adds time to the block, up to 172_800_000 in total. |
 | `timer.skipped` | `block_id` | Ends the block early with outcome `skipped`. |
 | `timer.stopped` | `block_id` | Ends the block early with outcome `abandoned`. |
 | `timer.reset` | `block_id` | Restarts the block from its original `planned_ms`, running from `hlc_ms`. Discards extensions and elapsed time. |
@@ -59,7 +79,7 @@ Process events in total order. Let `t = hlc_ms` of the event.
 2. `timer.started`: if `current` is live (running or paused) it is ended with outcome `abandoned`: for a running block `elapsed_ms += t - phase_since_ms`; for a paused block elapsed is unchanged; `ended_ms = t`. Then create the new block: `phase = running`, `started_ms = phase_since_ms = t`, `elapsed_ms = 0`. A `timer.started` for a `block_id` that already exists is ignored.
 3. `timer.paused`: applies only if `block_id == current` and it is running. `elapsed_ms += t - phase_since_ms`; `phase = paused`; `phase_since_ms = t`.
 4. `timer.resumed`: applies only if `block_id == current` and it is paused. `phase = running`; `phase_since_ms = t`.
-5. `timer.extended`: applies only if `block_id == current`. `planned_ms += add_ms`. Running or paused.
+5. `timer.extended`: applies only if `block_id == current` and `planned_ms + add_ms <= 172_800_000` (48 h); otherwise it is a no-op (the event stays in the log). Then `planned_ms += add_ms`. Running or paused.
 6. `timer.skipped` / `timer.stopped`: apply only if `block_id == current`. For a running block `elapsed_ms += t - phase_since_ms`. Set `outcome` to `skipped` / `abandoned`, `ended_ms = t`, `phase = ended`, `current = none`.
 7. `timer.reset`: applies only if `block_id == current`. `planned_ms` returns to the original value from `timer.started`; `elapsed_ms = 0`; `phase = running`; `phase_since_ms = t`; `started_ms` is unchanged.
 8. `block.labeled`: applies to any known block, including ended ones; unknown `block_id` is ignored. Last event in total order wins per field.
@@ -99,10 +119,10 @@ A Command is a request that the Core validates against the current state at wall
 
 | Command | Valid when | Events |
 | --- | --- | --- |
-| `start(kind, planned_ms, label?, project?)` | always | `timer.started` with a new `block_id` |
+| `start(kind, planned_ms, label?, project?)` | `planned_ms` in `1..=86_400_000` | `timer.started` with a new `block_id` |
 | `pause` | a block is running | `timer.paused` |
 | `resume` | a block is paused | `timer.resumed` |
-| `extend(add_ms)` | a block is live | `timer.extended` |
+| `extend(add_ms)` | a block is live and `planned_ms + add_ms <= 172_800_000` (else an invalid-argument error: the reducer would ignore it) | `timer.extended` |
 | `skip` | a block is live | `timer.skipped` |
 | `stop` | a block is live | `timer.stopped` |
 | `reset` | a block is live | `timer.reset` |

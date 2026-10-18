@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, oneshot, watch};
@@ -48,6 +48,12 @@ pub struct SyncOptions {
     /// Test hook: once, abruptly close the connection instead of sending event frame number
     /// `n + 1` of a session.
     pub drop_after_frames: Option<usize>,
+    /// A session is aborted with an error once the peer has sent this many events in it. What
+    /// was stored stays stored; the next session continues. Default 50 000.
+    pub max_events_per_session: usize,
+    /// Connections from Devices that are not (or no longer) trusted are served at most this
+    /// many at a time, until they pair; the rest are dropped at once. Default 16.
+    pub max_unauthenticated: usize,
 }
 
 impl Default for SyncOptions {
@@ -61,6 +67,8 @@ impl Default for SyncOptions {
             idle_timeout: Duration::from_secs(60),
             connect_timeout: Duration::from_secs(30),
             drop_after_frames: None,
+            max_events_per_session: 50_000,
+            max_unauthenticated: 16,
         }
     }
 }
@@ -133,6 +141,17 @@ pub(crate) struct Inner {
     offers: Mutex<HashMap<String, Offer>>,
     sessions: Mutex<HashMap<u64, (String, Connection)>>,
     next_session: AtomicU64,
+    /// Connections currently in the unauthenticated phase (see [`SyncOptions::max_unauthenticated`]).
+    unauthenticated: AtomicUsize,
+}
+
+/// Counts one unauthenticated connection until dropped.
+struct UnauthGuard<'a>(&'a AtomicUsize);
+
+impl Drop for UnauthGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn now_ms() -> i64 {
@@ -230,6 +249,19 @@ impl Inner {
     /// Listener side of one connection.
     async fn serve(self: &Arc<Self>, conn: Connection) -> Result<()> {
         let peer = conn.remote_id().to_string();
+        // Anyone who knows the endpoint id can reach this point; only trusted Devices are
+        // exempt from the cap on concurrent connections that have not authenticated yet.
+        let mut unauth = if self.trust(&peer)? == Trust::Paired {
+            None
+        } else {
+            let n = self.unauthenticated.fetch_add(1, Ordering::SeqCst);
+            if n >= self.opts.max_unauthenticated {
+                self.unauthenticated.fetch_sub(1, Ordering::SeqCst);
+                conn.close(3u32.into(), b"busy");
+                return Err(Error::Protocol("too many unauthenticated connections".into()));
+            }
+            Some(UnauthGuard(&self.unauthenticated))
+        };
         let _guard = self.register(&peer, &conn);
         let (mut send, mut recv) = timeout(Duration::from_secs(10), conn.accept_bi())
             .await
@@ -245,6 +277,7 @@ impl Inner {
             match self.check_offer(&secret) {
                 Ok(own_name) => {
                     self.set_paired(&peer, &name)?;
+                    drop(unauth.take());
                     write_frame(&mut send, &Frame::PairOk { device_id: self.device_id.clone(), name: own_name })
                         .await?;
                 }
@@ -261,7 +294,7 @@ impl Inner {
             return reject(&conn, &mut send, "unpaired").await;
         }
         match self.trust(&peer)? {
-            Trust::Paired => {}
+            Trust::Paired => drop(unauth.take()),
             Trust::Unpaired => return reject(&conn, &mut send, "unpaired").await,
             Trust::Revoked => return reject(&conn, &mut send, "revoked").await,
         }
@@ -306,9 +339,12 @@ impl Inner {
             let guard = inner.register(&peer, &conn);
             let res = session::run(&inner, &conn, &mut send, &mut recv, &peer, vv, peer_live, Some(tx)).await;
             drop(guard);
-            // Let the listener close first so our last frames are delivered.
-            let _ = timeout(Duration::from_secs(5), conn.closed()).await;
-            conn.close(0u32.into(), b"bye");
+            if res.is_ok() {
+                // Let the listener close first so our last frames are delivered. After a
+                // failed session there is nothing left to deliver: close at once.
+                let _ = timeout(Duration::from_secs(5), conn.closed()).await;
+            }
+            conn.close(if res.is_ok() { 0u32 } else { 1u32 }.into(), b"bye");
             res
         });
         match rx.await {
@@ -409,6 +445,7 @@ impl SyncNode {
             offers: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(0),
+            unauthenticated: AtomicUsize::new(0),
         });
         let router = Router::builder(endpoint).accept(ALPN, Handler(inner.clone())).spawn();
         Ok(SyncNode { inner, router })

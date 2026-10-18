@@ -117,7 +117,7 @@ fn stats_group_focus_time_like_the_api() {
         focus(&core, label);
         core.skip().unwrap();
     }
-    // Skipped blocks run for ~0 ms; make time visible through an extended completed-by-planned total.
+    // Skipped blocks run for about 0 ms, so only grouping, keys and ordering are checked here.
     let by_label = core.stats(None, None, 0, CoreGroupBy::Label).unwrap();
     let keys: Vec<&str> = by_label.groups.iter().map(|g| g.key.as_str()).collect();
     assert_eq!(keys.len(), 3);

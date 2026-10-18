@@ -18,16 +18,18 @@ final class FakeAPI: PomoAPI, @unchecked Sendable {
     let recentBox = Box<[Block]>([])
     private let contBox = Box<AsyncThrowingStream<StreamEvent, Error>.Continuation?>(nil)
     let streamOpens = Box(0)
+    let statusCalls = Box(0)
+    let blocksCalls = Box(0)
 
     init(_ s: Status) { statusBox = Box(s) }
 
-    func status() async throws -> Status { statusBox.value }
+    func status() async throws -> Status { statusCalls.value += 1; return statusBox.value }
     func send(_ command: Command, source: String?) async throws -> CommandResult {
         sentBox.value.append(command)
         return CommandResult(timer: statusBox.value.timer, replayed: false)
     }
     func stats(fromMs: Int64?, toMs: Int64?, tzOffsetMin: Int, groupBy: StatsGroupBy) async throws -> Stats { Stats() }
-    func blocks(fromMs: Int64?, toMs: Int64?, limit: Int?) async throws -> [Block] { recentBox.value }
+    func blocks(fromMs: Int64?, toMs: Int64?, limit: Int?) async throws -> [Block] { blocksCalls.value += 1; return recentBox.value }
     func stream() -> AsyncThrowingStream<StreamEvent, Error> {
         let (s, c) = AsyncThrowingStream<StreamEvent, Error>.makeStream()
         contBox.value = c
@@ -124,6 +126,26 @@ func makeModel(_ api: FakeAPI, clock: Box<Int64> = Box(1_000_000), connector: (@
         api.statusBox.value = idleStatus
         api.emit("pomo.event", "{}")
         #expect(await waitUntil { m.glyph == .idle })
+    }
+
+    @Test func resyncEventRefetchesStatusAndBlocksLikeAReconnect() async {
+        let api = FakeAPI(running(60_000))
+        let m = makeModel(api)
+        m.connect(); defer { m.disconnect() }
+        #expect(await waitUntil { m.connection == .online && m.resyncCount == 1 })
+
+        // While the client was behind, the timer ended and a block landed in the history.
+        api.statusBox.value = idleStatus
+        api.recentBox.value = [Block(id: "b1", kind: .focus, plannedMs: 1, phase: "ended", outcome: "completed", endedMs: 5)]
+        let status = api.statusCalls.value, blocks = api.blocksCalls.value
+        api.emit("pomo.resync", #"{"missed":12}"#)
+        #expect(await waitUntil { m.resyncCount == 2 })
+        #expect(api.statusCalls.value > status)
+        #expect(api.blocksCalls.value > blocks)
+        #expect(m.glyph == .idle)
+        #expect(m.lastBlockSummary == "Last: focus completed")
+        #expect(m.connection == .online)
+        #expect(api.streamOpens.value == 1)  // no reconnect: the stream continues
     }
 
     @Test func idleReportsLastBlockOutcome() async {

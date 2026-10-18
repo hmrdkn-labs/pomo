@@ -1,21 +1,38 @@
 //! SQLite store: canonical event log plus the `blocks` projection.
 
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 
 use crate::reducer::{fold, State};
 use crate::stats;
 use crate::types::*;
+use crate::validity::*;
 
 const MIGRATION_0001: &str = include_str!("../../spec/migrations/0001_init.sql");
 const MIGRATION_0002: &str = include_str!("../../spec/migrations/0002_peers.sql");
+
+/// Migrations in order; each runs in the transaction that bumps `meta.schema_version`.
+const MIGRATIONS: [(i64, &str); 2] = [(1, MIGRATION_0001), (2, MIGRATION_0002)];
+/// Newest schema version this build understands.
+const SCHEMA_VERSION: i64 = 2;
 
 /// Owned form of [`EventKey`].
 type OwnedKey = (i64, u32, String, u64);
 
 fn owned_key(e: &Event) -> OwnedKey {
     (e.hlc_ms, e.hlc_counter, e.device_id.clone(), e.seq)
+}
+
+type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
+
+fn system_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// One Device's store. Holds the cached fold of the log; keeps `blocks` equal to it.
@@ -26,6 +43,8 @@ pub struct Store {
     state: State,
     /// Greatest event position stored.
     last_key: Option<OwnedKey>,
+    /// Wall clock used to reject far-future events from peers (see [`Store::set_clock`]).
+    clock: Clock,
 }
 
 fn new_uuid() -> String {
@@ -129,20 +148,32 @@ fn check_device_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_event(e: &Event) -> Option<&'static str> {
-    if e.id.is_empty() {
-        Some("empty id")
-    } else if e.device_id.is_empty() {
-        Some("empty device_id")
-    } else if e.seq < 1 || e.seq > i64::MAX as u64 {
-        Some("seq out of range")
-    } else if !e.payload.is_object() {
-        Some("payload is not an object")
-    } else if e.command_key.as_deref() == Some("") {
-        Some("empty command_key")
-    } else {
-        None
+/// What the validity and clock checks decided about one ingested event.
+enum Verdict {
+    Ok,
+    Invalid(String),
+    Future,
+}
+
+/// Reads `meta.schema_version` strictly. `None` when the store has no `meta` table yet.
+fn stored_schema_version(tx: &Transaction<'_>) -> Result<Option<i64>> {
+    let has_meta: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_meta {
+        return Ok(None);
     }
+    let text: Option<String> = tx
+        .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))
+        .optional()?;
+    let text = text.ok_or_else(|| Error::InvalidState("store metadata is damaged: no schema_version".into()))?;
+    text.parse::<i64>()
+        .ok()
+        .filter(|v| *v >= 1)
+        .map(Some)
+        .ok_or_else(|| Error::InvalidState(format!("store metadata is damaged: schema_version {text:?}")))
 }
 
 impl Store {
@@ -164,43 +195,58 @@ impl Store {
         Store::init(Connection::open_in_memory()?, device_id, config)
     }
 
-    fn init(conn: Connection, device_id: &str, config: Config) -> Result<Store> {
+    fn init(mut conn: Connection, device_id: &str, config: Config) -> Result<Store> {
         if device_id.is_empty() {
             return Err(Error::InvalidArgument("empty device_id".into()));
         }
+        if device_id.len() > MAX_ID_BYTES {
+            return Err(Error::InvalidArgument(format!("device_id longer than {MAX_ID_BYTES} bytes")));
+        }
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-        let has_meta: bool = conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta')",
-            [],
-            |r| r.get(0),
-        )?;
-        if !has_meta {
-            conn.execute_batch(&format!("BEGIN;\n{MIGRATION_0001}\nCOMMIT;"))?;
-            conn.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', '1'), ('device_id', ?1)",
-                [device_id],
-            )?;
-        } else {
-            let stored: String =
-                conn.query_row("SELECT value FROM meta WHERE key='device_id'", [], |r| r.get(0))?;
-            if stored != device_id {
-                return Err(Error::DeviceMismatch { stored, requested: device_id.to_string() });
+        // First open and every migration run in one transaction with the version bump, so a
+        // crash leaves either the old store or the new one, never a half-initialised file.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version = match stored_schema_version(&tx)? {
+            None => 0,
+            Some(v) if v > SCHEMA_VERSION => {
+                return Err(Error::InvalidState(format!(
+                    "this store uses schema version {v}, newer than the version {SCHEMA_VERSION} this build supports; upgrade Pomo"
+                )));
             }
+            Some(v) => {
+                let stored: Option<String> = tx
+                    .query_row("SELECT value FROM meta WHERE key='device_id'", [], |r| r.get(0))
+                    .optional()?;
+                let stored =
+                    stored.ok_or_else(|| Error::InvalidState("store metadata is damaged: no device_id".into()))?;
+                if stored != device_id {
+                    return Err(Error::DeviceMismatch { stored, requested: device_id.to_string() });
+                }
+                v
+            }
+        };
+        for (v, sql) in MIGRATIONS {
+            if v <= version {
+                continue;
+            }
+            tx.execute_batch(sql)?;
+            if v == 1 {
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', '1'), ('device_id', ?1)",
+                    [device_id],
+                )?;
+            }
+            tx.execute("UPDATE meta SET value = ?1 WHERE key = 'schema_version'", [v.to_string()])?;
         }
-        let version: i64 = conn
-            .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get::<_, String>(0))?
-            .parse()
-            .unwrap_or(0);
-        if version < 2 {
-            conn.execute_batch(&format!("BEGIN;\n{MIGRATION_0002}\nCOMMIT;"))?;
-        }
-        conn.execute("INSERT OR IGNORE INTO devices (device_id) VALUES (?1)", [device_id])?;
+        tx.execute("INSERT OR IGNORE INTO devices (device_id) VALUES (?1)", [device_id])?;
+        tx.commit()?;
         let mut s = Store {
             conn,
             device_id: device_id.to_string(),
             config,
             state: State::new(config),
             last_key: None,
+            clock: Box::new(system_now_ms),
         };
         s.rebuild_projections()?;
         Ok(s)
@@ -209,6 +255,13 @@ impl Store {
     /// This store's device id.
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// Replaces the wall clock (ms since the epoch) that ingest compares peer events against.
+    /// The default is the system clock; tests inject a fixed or moving one. Command issuing
+    /// takes its time from the `now_ms` argument of [`Store::apply`], not from this clock.
+    pub fn set_clock(&mut self, clock: impl Fn() -> i64 + Send + Sync + 'static) {
+        self.clock = Box::new(clock);
     }
 
     /// Refolds the whole log and rewrites the `blocks` table.
@@ -229,26 +282,30 @@ impl Store {
 
     /// Stores new events, idempotent by `id`. `(device_id, seq)` / `(device_id, command_key)`
     /// collisions with a different id are rejected into the report and not stored; the rest of
-    /// the call is stored. Updates the projection.
+    /// the call is stored. Events failing [`validate_event`] are rejected into `invalid`, events
+    /// more than a day ahead of this Device's clock are skipped into `future`; in both cases
+    /// later events of the same Device in the call are skipped too, so the log never gets a
+    /// `seq` hole. Updates the projection.
     pub fn ingest(&mut self, events: &[Event]) -> Result<IngestReport> {
-        self.ingest_with(events, false)
+        self.ingest_with(events, false, false)
     }
 
-    /// Like [`Store::ingest`], but all-or-nothing on conflicts: when any event collides with a
-    /// stored one under a different id (or with another event of the same call), returns
-    /// [`Error::Conflict`] and stores nothing. Structurally invalid events are still skipped
-    /// and listed in the report.
+    /// Like [`Store::ingest`], but all-or-nothing: when any event collides with a stored one
+    /// under a different id (or with another event of the same call), returns
+    /// [`Error::Conflict`]; when any event fails [`validate_event`], returns
+    /// [`Error::InvalidArgument`]. Either way nothing is stored. Far-future events are skipped
+    /// as in [`Store::ingest`].
     pub fn ingest_atomic(&mut self, events: &[Event]) -> Result<IngestReport> {
-        self.ingest_with(events, true)
+        self.ingest_with(events, true, false)
     }
 
-    fn ingest_with(&mut self, events: &[Event], atomic: bool) -> Result<IngestReport> {
-        match self.ingest_inner(events, atomic) {
+    fn ingest_with(&mut self, events: &[Event], atomic: bool, local: bool) -> Result<IngestReport> {
+        match self.ingest_inner(events, atomic, local) {
             Ok(r) => Ok(r),
             Err(e) => {
-                // A conflict returns before the cached state changes; anything else may
-                // leave it ahead of the rolled-back transaction.
-                if !matches!(e, Error::Conflict(_)) {
+                // A conflict or an invalid event returns before the cached state changes;
+                // anything else may leave it ahead of the rolled-back transaction.
+                if !matches!(e, Error::Conflict(_) | Error::InvalidArgument(_)) {
                     let _ = self.rebuild_projections();
                 }
                 Err(e)
@@ -256,14 +313,62 @@ impl Store {
         }
     }
 
-    fn ingest_inner(&mut self, events: &[Event], atomic: bool) -> Result<IngestReport> {
-        let tx = self.conn.transaction()?;
+    fn ingest_inner(&mut self, events: &[Event], atomic: bool, local: bool) -> Result<IngestReport> {
         let mut report = IngestReport::default();
-        let mut fresh: Vec<&Event> = Vec::new();
+        let horizon = (self.clock)().saturating_add(MAX_FUTURE_SKEW_MS);
+        let mut verdicts: Vec<Verdict> = Vec::with_capacity(events.len());
+        // Per Device: lowest `seq` of an event that will not be stored, and whether it is a
+        // future event (else invalid). Later seqs of that Device are skipped too.
+        let mut stop: HashMap<&str, (u64, bool)> = HashMap::new();
         for e in events {
-            if let Some(why) = check_event(e) {
-                report.invalid.push(Rejected { id: e.id.clone(), reason: why.into() });
-                continue;
+            let v = match validate_event(e) {
+                Err(why) if atomic => {
+                    return Err(Error::InvalidArgument(format!("event {:.40}: {why}", e.id)));
+                }
+                Err(why) => Verdict::Invalid(why),
+                Ok(()) if !local && e.hlc_ms > horizon => Verdict::Future,
+                Ok(()) => Verdict::Ok,
+            };
+            if !matches!(v, Verdict::Ok) {
+                let future = matches!(v, Verdict::Future);
+                let slot = stop.entry(&e.device_id).or_insert((e.seq, future));
+                if e.seq < slot.0 {
+                    *slot = (e.seq, future);
+                }
+            }
+            verdicts.push(v);
+        }
+
+        let tx = self.conn.transaction()?;
+        let mut fresh: Vec<&Event> = Vec::new();
+        for (e, verdict) in events.iter().zip(&verdicts) {
+            match verdict {
+                Verdict::Invalid(why) => {
+                    report.invalid.push(Rejected { id: e.id.clone(), reason: why.clone() });
+                    continue;
+                }
+                Verdict::Future => {
+                    report.future.push(Rejected {
+                        id: e.id.clone(),
+                        reason: format!("hlc_ms {} is more than a day ahead of this clock", e.hlc_ms),
+                    });
+                    continue;
+                }
+                Verdict::Ok => {}
+            }
+            if let Some(&(at, future)) = stop.get(e.device_id.as_str()) {
+                if e.seq > at {
+                    let r = Rejected {
+                        id: e.id.clone(),
+                        reason: format!("follows the rejected event {} of {}", at, e.device_id),
+                    };
+                    if future {
+                        report.future.push(r);
+                    } else {
+                        report.invalid.push(r);
+                    }
+                    continue;
+                }
             }
             let id_exists: bool =
                 tx.query_row("SELECT EXISTS (SELECT 1 FROM events WHERE id = ?1)", [&e.id], |r| r.get(0))?;
@@ -356,7 +461,9 @@ impl Store {
     }
 
     /// Validates `cmd` against the state at the new event's time and issues exactly one event
-    /// (HLC rule, per-device `seq`). A used `command_key` returns the original event and writes nothing.
+    /// (HLC rule, per-device `seq`). A used `command_key` returns the original event and writes
+    /// nothing. The issued event must satisfy [`validate_event`], else
+    /// [`Error::InvalidArgument`].
     pub fn apply(&mut self, cmd: Command, source: Source, now_ms: i64) -> Result<Event> {
         if let Some(k) = &cmd.command_key {
             let prev = self
@@ -372,15 +479,24 @@ impl Store {
             }
         }
         let (hlc_ms, hlc_counter) = match &self.last_key {
-            Some(l) if now_ms <= l.0 => (l.0, l.1 + 1),
+            Some(l) if now_ms <= l.0 => {
+                if l.1 >= MAX_HLC_COUNTER {
+                    (l.0.saturating_add(1), 0)
+                } else {
+                    (l.0, l.1 + 1)
+                }
+            }
             _ => (now_ms, 0),
         };
         let (timer, blocks) = self.state.at(hlc_ms);
         let live = timer.block_id.clone();
+        let duration_error = |name: &str| {
+            Error::InvalidArgument(format!("{name} must be in {MIN_DURATION_MS}..={MAX_DURATION_MS} (24 h)"))
+        };
         let payload = match cmd.body {
             CommandBody::Start { kind, planned_ms, label, project } => {
-                if planned_ms <= 0 {
-                    return Err(Error::InvalidArgument("planned_ms must be > 0".into()));
+                if !duration_in_bounds(planned_ms) {
+                    return Err(duration_error("planned_ms"));
                 }
                 Payload::Started { block_id: new_uuid(), kind, planned_ms, label, project }
             }
@@ -393,11 +509,22 @@ impl Store {
                 _ => return Err(Error::InvalidState("no paused block to resume".into())),
             },
             CommandBody::Extend { add_ms } => {
-                if add_ms <= 0 {
-                    return Err(Error::InvalidArgument("add_ms must be > 0".into()));
+                if !duration_in_bounds(add_ms) {
+                    return Err(duration_error("add_ms"));
                 }
                 match live {
-                    Some(block_id) => Payload::Extended { block_id, add_ms },
+                    Some(block_id) => {
+                        // The reducer would ignore an extend past the cap; say so instead of
+                        // writing an event that does nothing.
+                        let planned = blocks.iter().find(|b| b.id == block_id).map_or(0, |b| b.planned_ms);
+                        if planned.saturating_add(add_ms) > MAX_BLOCK_PLANNED_MS {
+                            return Err(Error::InvalidArgument(format!(
+                                "a block cannot be longer than {} hours in total",
+                                MAX_BLOCK_PLANNED_MS / 3_600_000
+                            )));
+                        }
+                        Payload::Extended { block_id, add_ms }
+                    }
                     None => return Err(Error::InvalidState("no live block to extend".into())),
                 }
             }
@@ -444,7 +571,8 @@ impl Store {
             source,
             command_key: cmd.command_key,
         };
-        let report = self.ingest(std::slice::from_ref(&ev))?;
+        validate_event(&ev).map_err(Error::InvalidArgument)?;
+        let report = self.ingest_with(std::slice::from_ref(&ev), false, true)?;
         if report.inserted != 1 {
             return Err(Error::Conflict(format!("event rejected: {report:?}")));
         }
@@ -530,16 +658,29 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Events the holder of `vv` lacks, ordered by `(device_id, seq)`.
+    /// Events the holder of `vv` lacks, ordered by `(device_id, seq)`. Entries of `vv` above
+    /// `i64::MAX` are clamped.
     pub fn events_after(&self, vv: &VersionVector) -> Result<Vec<Event>> {
+        self.events_after_limit(vv, usize::MAX)
+    }
+
+    /// The first `limit` events of [`Store::events_after`], read with a SQL `LIMIT` so a large
+    /// log is never loaded whole. Each Device's events come as a prefix of its `seq` run, so
+    /// advancing `vv` by what was returned and calling again continues without gaps.
+    pub fn events_after_limit(&self, vv: &VersionVector, limit: usize) -> Result<Vec<Event>> {
         let mut out = Vec::new();
         let mut st = self.conn.prepare(&format!(
-            "SELECT {EVENT_COLS} FROM events WHERE device_id = ?1 AND seq > ?2 ORDER BY seq"
+            "SELECT {EVENT_COLS} FROM events WHERE device_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3"
         ))?;
         for (dev, max) in self.version_vector()? {
-            let have = vv.get(&dev).copied().unwrap_or(0);
+            let room = limit.saturating_sub(out.len());
+            if room == 0 {
+                break;
+            }
+            let have = vv.get(&dev).copied().unwrap_or(0).min(i64::MAX as u64);
             if max > have {
-                for e in st.query_map(params![dev, have as i64], row_to_event)? {
+                let room = room.min(i64::MAX as usize) as i64;
+                for e in st.query_map(params![dev, have as i64, room], row_to_event)? {
                     out.push(e?);
                 }
             }
@@ -568,6 +709,35 @@ impl Store {
         Ok(out)
     }
 
+    /// The block `id`, settled at `now_ms`; one indexed lookup.
+    pub fn block(&self, id: &str, now_ms: i64) -> Result<Option<Block>> {
+        let b = self
+            .conn
+            .query_row(&format!("SELECT {BLOCK_COLS} FROM blocks WHERE id = ?1"), [id], row_to_block)
+            .optional()?;
+        Ok(b.map(|b| b.settled_at(now_ms).unwrap_or(b)))
+    }
+
+    /// Up to `limit` blocks with `started_ms` in `range` (and of `kind`, when given), newest
+    /// first by `(started_ms, id)`, settled at `now_ms`. The range, kind and limit are applied in SQL.
+    pub fn blocks_page(&self, range: Range, kind: Option<Kind>, limit: usize, now_ms: i64) -> Result<Vec<Block>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {BLOCK_COLS} FROM blocks
+             WHERE started_ms >= ?1 AND started_ms < ?2 AND (?3 IS NULL OR kind = ?3)
+             ORDER BY started_ms DESC, id DESC LIMIT ?4"
+        ))?;
+        let limit = limit.min(i64::MAX as usize) as i64;
+        let rows =
+            st.query_map(params![range.from_ms, range.to_ms, kind.map(Kind::as_str), limit], row_to_block)?;
+        let mut out: Vec<Block> = rows.collect::<rusqlite::Result<_>>()?;
+        for b in &mut out {
+            if let Some(s) = b.settled_at(now_ms) {
+                *b = s;
+            }
+        }
+        Ok(out)
+    }
+
     /// Raw `blocks` table rows in `range` (not settled at any `now`); equals the fold of the log.
     pub fn projected_blocks(&self, range: Range) -> Result<Vec<Block>> {
         let mut st = self.conn.prepare(&format!(
@@ -578,8 +748,28 @@ impl Store {
     }
 
     /// Focus statistics for blocks started in `range`; days use the fixed UTC offset `tz_offset_min`.
+    /// Only the blocks in `range` are loaded; the streak reads the distinct days of completed
+    /// focus blocks from SQL.
     pub fn stats(&self, range: Range, tz_offset_min: i32, now_ms: i64) -> Result<Stats> {
-        let all = self.blocks(Range::ALL, now_ms)?;
-        Ok(stats::compute(&all, range, tz_offset_min, now_ms))
+        let in_range = self.blocks(range, now_ms)?;
+        let (focus_ms_by_day, focus_ms_total, completed_focus) = stats::range_totals(&in_range, tz_offset_min);
+        let off = i64::from(tz_offset_min) * 60_000;
+        let mut st = self.conn.prepare(
+            "SELECT DISTINCT ((started_ms + ?1) / 86400000)
+                    - (CASE WHEN (started_ms + ?1) % 86400000 < 0 THEN 1 ELSE 0 END)
+             FROM blocks WHERE kind = 'focus' AND outcome = 'completed'",
+        )?;
+        let mut days: BTreeSet<i64> =
+            st.query_map([off], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<_>>()?;
+        // The live block may have run out at `now_ms` without an event settling it.
+        if let Some(id) = self.state.current_id() {
+            if let Some(b) = self.block(id, now_ms)? {
+                if b.kind == Kind::Focus && b.outcome == Some(Outcome::Completed) {
+                    days.insert(stats::day_number(b.started_ms, tz_offset_min));
+                }
+            }
+        }
+        let streak_days = stats::streak(&days, stats::day_number(now_ms, tz_offset_min));
+        Ok(Stats { focus_ms_by_day, focus_ms_total, completed_focus, streak_days })
     }
 }

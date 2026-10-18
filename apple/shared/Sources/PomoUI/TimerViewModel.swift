@@ -44,6 +44,9 @@ public final class TimerViewModel {
     public private(set) var lastBlock: Block?
     public private(set) var nowMs: Int64
     public private(set) var lastError: String?
+    /// Bumped whenever state was refetched wholesale: the stream (re)opened or the Daemon sent `pomo.resync`.
+    /// Views showing data this model does not own (statistics) reload on change.
+    public private(set) var resyncCount = 0
     public var labelDraft = ""
     public var kindOverride: Kind?
 
@@ -193,6 +196,11 @@ public final class TimerViewModel {
             switch event {
             case .opened:
                 try await refresh(api)
+                resyncCount += 1
+            case let .message(m) where m.event == "pomo.resync":
+                // This client fell behind and events were dropped: same as a reconnect.
+                try await refresh(api)
+                resyncCount += 1
             case let .message(m):
                 if m.event == "pomo.block_end", let d = m.data.data(using: .utf8),
                    let end = try? Self.decoder.decode(BlockEnd.self, from: d)

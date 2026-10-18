@@ -7,14 +7,17 @@ public struct DaemonLauncher: Sendable {
     public let home: URL
     public let binaryOverride: URL?
     public let startupTimeout: Duration
+    /// How long to keep looking for a live daemon after the spawned `pomod` has exited.
+    public let exitGrace: Duration
 
     public init(
         home: URL = DaemonConfig.homeDirectory(), binaryOverride: URL? = nil,
-        startupTimeout: Duration = .seconds(15)
+        startupTimeout: Duration = .seconds(15), exitGrace: Duration = .seconds(3)
     ) {
         self.home = home
         self.binaryOverride = binaryOverride
         self.startupTimeout = startupTimeout
+        self.exitGrace = exitGrace
     }
 
     public var logURL: URL { home.appendingPathComponent("pomod.log") }
@@ -36,11 +39,22 @@ public struct DaemonLauncher: Sendable {
     /// A client for a live daemon, starting `pomod` first when `daemon.json` is missing or points at a dead port.
     public func connect() async throws -> PomoClient {
         if let client = await liveClient() { return client }
-        try launch()
+        let child = try launch()
         let deadline = ContinuousClock.now + startupTimeout
+        var exitedAt: ContinuousClock.Instant?
         while ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(150))
             if let client = await liveClient() { return client }
+            // The child may exit because another pomod holds `daemon.lock` ("already running"). That other
+            // daemon may still be writing `daemon.json`, so keep looking for a short grace period, then give up.
+            if let status = child.exitStatus {
+                let first = exitedAt ?? ContinuousClock.now
+                exitedAt = first
+                if ContinuousClock.now - first > exitGrace {
+                    throw ConnectionError.unreachable(
+                        "pomod exited (\(status.description)) and no daemon is reachable. See \(logURL.path).")
+                }
+            }
         }
         throw ConnectionError.unreachable(
             "pomod did not start within \(startupTimeout.components.seconds) s. See \(logURL.path).")
@@ -55,7 +69,7 @@ public struct DaemonLauncher: Sendable {
     }
 
     /// Starts `pomod` in its own session so it outlives this app. stdout and stderr go to `pomod.log`.
-    func launch() throws {
+    func launch() throws -> SpawnedProcess {
         guard let binary = locateBinary() else {
             throw ConnectionError.daemonNotConfigured("pomod is not installed. Reinstall Pomo or put pomod on your PATH.")
         }
@@ -92,6 +106,29 @@ public struct DaemonLauncher: Sendable {
         }
         // Reap quietly if it exits while the app is still running; the app never signals it.
         let spawned = pid
-        DispatchQueue.global(qos: .utility).async { var st: Int32 = 0; waitpid(spawned, &st, 0) }
+        let child = SpawnedProcess()
+        DispatchQueue.global(qos: .utility).async {
+            var st: Int32 = 0
+            waitpid(spawned, &st, 0)
+            child.finish(ExitStatus(raw: st))
+        }
+        return child
     }
+}
+
+/// How a spawned process ended, from `waitpid`.
+struct ExitStatus: Sendable, CustomStringConvertible {
+    let raw: Int32
+    var description: String {
+        if raw & 0x7f == 0 { return "exit code \((raw >> 8) & 0xff)" }
+        return "signal \(raw & 0x7f)"
+    }
+}
+
+/// Exit state of the process `launch()` spawned; set by the reaper thread.
+final class SpawnedProcess: @unchecked Sendable {
+    private let lock = NSLock()
+    private var status: ExitStatus?
+    var exitStatus: ExitStatus? { lock.withLock { status } }
+    func finish(_ s: ExitStatus) { lock.withLock { status = s } }
 }

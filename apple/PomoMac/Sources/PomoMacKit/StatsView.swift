@@ -48,6 +48,7 @@ public struct StatsView: View {
         .foregroundStyle(theme.text)
         .task { await stats.load() }
         .onChange(of: timer.today) { _, _ in Task { await stats.load() } }
+        .onChange(of: timer.resyncCount) { _, _ in Task { await stats.load() } }
         .toolbar {
             ToolbarItem { Button { Task { await stats.load() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh").accessibilityLabel("Refresh statistics") }
         }

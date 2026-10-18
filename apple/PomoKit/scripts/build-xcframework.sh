@@ -14,12 +14,22 @@ profile=release
 cargo_profile=(--release)
 if [[ "${1:-}" == "--debug" ]]; then profile=debug; cargo_profile=(); fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/pomo-target/ios}"
+# Match the Swift packages' and the app's minimums, or the linker warns that the Rust objects are newer.
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
+# MACOSX_DEPLOYMENT_TARGET is set only for the macOS slice below: exported globally it also applies to the
+# host proc-macro dylibs, and recent macOS refuses to load them ("mis-aligned LINKEDIT string pool").
+macos_min="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
+unset MACOSX_DEPLOYMENT_TARGET
 targets=(aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin)
 
 cd "$root"
 for t in "${targets[@]}"; do
   rustup target list --installed | grep -qx "$t" || rustup target add "$t"
-  cargo build ${cargo_profile[@]+"${cargo_profile[@]}"} -p pomo-ffi --target "$t"
+  if [[ "$t" == *-darwin ]]; then
+    MACOSX_DEPLOYMENT_TARGET="$macos_min" cargo build ${cargo_profile[@]+"${cargo_profile[@]}"} -p pomo-ffi --target "$t"
+  else
+    cargo build ${cargo_profile[@]+"${cargo_profile[@]}"} -p pomo-ffi --target "$t"
+  fi
 done
 
 lib="libpomo_ffi.a"

@@ -1,0 +1,41 @@
+{
+  "name": "extend-cap-is-on-the-running-total",
+  "description": "the 48 h cap applies to the total after each extend in total order: a second 24 h extend that would pass it is ignored, and a smaller one after it that lands exactly on the cap applies",
+  "config": { "long_break_every": 4 },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001", "device_id": "mac", "seq": 1,
+      "hlc_ms": 1700000000000, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-000000000001", "kind": "focus", "planned_ms": 1000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002", "device_id": "mac", "seq": 2,
+      "hlc_ms": 1700000000100, "hlc_counter": 0, "type": "timer.extended",
+      "payload": { "block_id": "10000000-0000-4000-8000-000000000001", "add_ms": 86400000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003", "device_id": "mac", "seq": 3,
+      "hlc_ms": 1700000000200, "hlc_counter": 0, "type": "timer.extended",
+      "payload": { "block_id": "10000000-0000-4000-8000-000000000001", "add_ms": 86400000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004", "device_id": "mac", "seq": 4,
+      "hlc_ms": 1700000000300, "hlc_counter": 0, "type": "timer.extended",
+      "payload": { "block_id": "10000000-0000-4000-8000-000000000001", "add_ms": 86399000 },
+      "source": "user", "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000005000,
+      "timer": { "status": "running", "block_id": "10000000-0000-4000-8000-000000000001", "remaining_ms": 172795000, "next_kind": "focus" },
+      "blocks": [
+        { "id": "10000000-0000-4000-8000-000000000001", "kind": "focus", "label": null, "project": null, "outcome": null, "elapsed_ms": null, "phase": "running", "planned_ms": 172800000 }
+      ]
+    }
+  ]
+}

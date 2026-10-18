@@ -46,13 +46,18 @@ Lower level: `open_store(db_path, key_path)` returns the `Store` and `SecretKey`
 | `events_per_frame` | 500 | at most 500 |
 | `ping_interval` / `idle_timeout` | 20 s / 60 s | live-mode ping, silent-session limit |
 | `drop_after_frames` | none | test hook: once, drop the connection before event frame n+1 |
+| `max_events_per_session` | 50 000 | a session errors out once the peer has sent this many events in it; what was stored stays |
+| `max_unauthenticated` | 16 | concurrent connections from Devices that are not trusted; more are dropped at once |
 
 ## Behaviour notes
 
 - Trust lives in the store's `devices` table (`paired`, `revoked`), read and written with `Store::device` / `set_device_paired` / `set_device_revoked`.
 - Re-pairing a revoked device with a valid ticket clears the revocation.
 - The hello carries `live`. After both `done`s the stream stays open when either side is live, and both sides then forward new events and ping. A side that is not live keeps a stream the peer asked for until the peer says `bye` or closes. When neither is live, both say `bye`. A side that goes from live to not live (`set_live(false)`) says `bye`. The peer's flag is the one from its hello. `SyncReport::live` is true when the stream stays open. Sessions are not re-dialed automatically; call `sync_with` again.
-- Received frames are checked before storing: a `(device_id, seq)` or command-key conflict (`Store::ingest_atomic`) aborts the session and stores nothing from the frame; a `seq` gap drops that device's events from the frame and aborts; events of our own device beyond what we issued abort.
+- Received frames are checked before storing: a `(device_id, seq)` or command-key conflict (`Store::ingest_atomic`) aborts the session and stores nothing from the frame; so does an event that fails the validity bounds; a `seq` gap drops that device's events from the frame and aborts; events of our own device beyond what we issued abort.
+- Events more than 24 h ahead of this Device's clock are skipped (not stored, not an error); the rest of that Device's run is skipped for the session and everything is offered again at the next one. Tests set the clock with `Store::set_clock`.
+- Each Device's events are sent in `seq` order, a page at a time (`Store::events_after_limit`), never sorted into total order.
+- The trust model (paired Devices can forge each other's events; no signatures in v1) is in `spec/sync.md`.
 - The pairing secret is 16 random bytes, base64url without padding.
 
 ## Tests

@@ -4,12 +4,17 @@ The Daemon (`pomod`) serves this over HTTP on `127.0.0.1` only. The CLI (`pomo`)
 
 ## Setup
 
-- Data directory: `$POMO_HOME`, default `~/.pomo`. Holds `pomo.db` (the store), `token` (random 32 bytes, base64url, file mode `600`, created on first Daemon start) and `daemon.json` (`{"port": N, "pid": N}` written when listening).
+- Data directory: `$POMO_HOME`, default `~/.pomo`. Holds `pomo.db` (the store), `token` (random 32 bytes, base64url, file mode `600`, created on first Daemon start), `daemon.json` (`{"port": N, "pid": N}` written when listening, mode `600`) and `daemon.lock`.
+- One Daemon per data directory: it takes an exclusive `flock` on `$POMO_HOME/daemon.lock` before opening the store and holds it until it exits; a second `pomod` on the same directory fails to start with a message saying so. The HTTP port is bound before the sync node starts.
+- `token`, `daemon.json` and `daemon.lock` are opened without following symlinks (a symlink is refused). An existing `token` with group or other permissions is set back to `600` on start.
+- The store's first creation and every migration run in one transaction together with the `meta.schema_version` bump. A store whose `schema_version` is newer than the build understands, or is not a positive integer, is refused with a clear error (the Daemon does not start) instead of being written to.
 - Default port 47831; `--port 0` picks a free one and records it in `daemon.json`.
+- Every request must have `Host` equal to `127.0.0.1:<port>` or `localhost:<port>` (else `403 bad_host`, DNS rebinding) and must not carry an `Origin` header (else `403 bad_origin`; native clients send none, browsers always do on cross-site requests). Both checks come before authentication.
 - Every request needs `Authorization: Bearer <token>`. Missing or wrong token: `401`.
+- A `POST` that has a body needs `Content-Type: application/json` (else `415 unsupported_media_type`). A `POST` without a body (`/v1/pair/offer`, `/v1/sync`, `/v1/devices/{id}/revoke`) needs no content type.
 - Optional header `X-Pomo-Source: agent:<name>` sets the event `source` (default `user`). Names match `[a-z0-9_-]{1,32}`.
 - Optional header `Idempotency-Key: <string>` on `POST /v1/commands`; if absent the Daemon uses a fresh UUID (so the request is not retry-safe).
-- Bodies and responses are JSON, UTF-8. Times are integer ms. Errors: `{"error": {"code": "<snake_case>", "message": "<text>"}}` with `400` (bad input), `401`, `404`, `409` (command invalid for the current state: `invalid_state`), `500`.
+- Bodies and responses are JSON, UTF-8. Times are integer ms. Errors: `{"error": {"code": "<snake_case>", "message": "<text>"}}` with `400` (bad input, including a command whose event would break the "Validity bounds" of `events.md`: `planned_ms` and `add_ms` must be in `1..=86400000`, and a block cannot exceed 48 h in total), `401`, `403`, `404`, `409` (command invalid for the current state: `invalid_state`), `415`, `500`, `503` (`too_many_streams`).
 
 ## Endpoints
 
@@ -32,14 +37,14 @@ Blocks with `started_ms` in `[from_ms, to_ms)`, newest first, default limit 100,
 `{"from_ms","to_ms","tz_offset_min","focus_ms": N, "completed_focus": N, "streak_days": N, "groups": [{"key": "<day|label|project>", "focus_ms": N, "completed_focus": N}]}`. Groups sorted by `focus_ms` descending (by key ascending for `day`). A block with no label or project is grouped under key `""`. Aggregation is done by the Daemon.
 
 ### `GET /v1/events?after=<url-encoded JSON version vector>&limit=`
-Events the caller lacks, in total order. For sync diagnostics and export.
+Events the caller lacks, for sync diagnostics and export. Default `limit` 1000, maximum 10000 (larger values are clamped). The page holds, for each Device, a prefix of its `seq` run above the caller's vector entry (Devices in `device_id` order, filled up to `limit`), sorted into total order. To read on, advance the vector by the highest `seq` seen per Device and ask again. Vector entries above 2^63 - 1 are clamped.
 
 ### `GET /v1/stream`
-Server-sent events. Event `pomo.event` with the Event JSON as data, one per newly stored event (local or synced); event `pomo.block_end` with `{"block_id","outcome":"completed","ended_ms"}` when a running block reaches its end time (the Daemon schedules a timer for this; it writes no event). A comment line `: keepalive` every 15 s.
+Server-sent events. Event `pomo.event` with the Event JSON as data, one per newly stored event (local or synced); event `pomo.block_end` with `{"block_id","outcome":"completed","ended_ms"}` when a running block reaches its end time (the Daemon schedules a timer for this; it writes no event). Event `pomo.resync` with `{"missed": N}` when this client fell behind and events were dropped (N is how many): the client must refetch its state (`/v1/status`, `/v1/blocks`) instead of trusting the events it saw; the stream then continues. A comment line `: keepalive` every 15 s. At most 16 streams are open at once; a 17th request gets `503 too_many_streams`.
 
 ## CLI
 
-`pomo <command> [--json] [--home DIR]`. Commands: `start [--kind focus|short|long] [--minutes N] [--label TEXT] [--project TEXT]` (default focus, 25 minutes; short 5; long 15), `pause`, `resume`, `extend --minutes N`, `skip`, `stop`, `reset`, `label TEXT [--block ID] [--project TEXT]`, `status`, `blocks [--since 7d] [--limit N]`, `stats [--since 7d] [--by day|label|project]`, `events --follow`, `mcp`. `--source agent:<name>` sets the source header. Human output is one tidy line or a small table; `--json` prints exactly the API response body. Exit code 0 on success, 1 on a request error, 2 if the Daemon is not reachable (message says how to start it).
+`pomo <command> [--json] [--home DIR]`. Commands: `start [--kind focus|short|long] [--minutes N] [--label TEXT] [--project TEXT]` (default focus, 25 minutes; short 5; long 15), `pause`, `resume`, `extend --minutes N`, `skip`, `stop`, `reset`, `label TEXT [--block ID] [--project TEXT]`, `status`, `blocks [--since 7d] [--limit N]`, `stats [--since 7d] [--by day|label|project]`, `events --follow`, `mcp`. `--minutes` (and the MCP `minutes` arguments) must be a finite number greater than 0 and at most 1440 (24 h); anything else is rejected with a message before any request is made. `--source agent:<name>` sets the source header. Human output is one tidy line or a small table; `--json` prints exactly the API response body. Exit code 0 on success, 1 on a request error, 2 if the Daemon is not reachable (message says how to start it).
 
 ## MCP (`pomo mcp`, stdio)
 

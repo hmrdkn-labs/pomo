@@ -22,9 +22,8 @@ struct CorePomoAPITests {
         #expect(try await api.send(.pause, source: nil).timer.status == .paused)
         #expect(try await api.send(.resume, source: nil).timer.status == .running)
         let extended = try await api.send(.extend(addMs: 5 * 60_000), source: nil).timer
-        print("DBG", extended)
-        #expect(extended.block?.plannedMs == 30 * 60_000)
-        #expect(try await api.send(.reset, source: nil).timer.block?.plannedMs == 25 * 60_000)
+        #expect(extended.block?.plannedMs == ms(30))
+        #expect(try await api.send(.reset, source: nil).timer.block?.plannedMs == ms(25))
         _ = try await api.send(.label(blockId: nil, label: "review"), source: "agent:claude")
         #expect(try await api.status().timer.block?.label == "review")
         let skipped = try await api.send(.skip, source: nil).timer
@@ -149,7 +148,7 @@ struct CorePomoAPITests {
         #expect(vm.countdown.status == .paused && vm.phaseName == "Paused")
         await vm.resume()
         await vm.extend(minutes: 5)
-        #expect(vm.block?.plannedMs == 30 * 60_000)
+        #expect(vm.block?.plannedMs == ms(30))
         await vm.skip()
         #expect(vm.countdown.status == .idle)
         #expect(vm.lastBlockSummary == "Last: focus skipped")

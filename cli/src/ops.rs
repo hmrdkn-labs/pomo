@@ -31,9 +31,12 @@ pub fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
+/// Longest block the API accepts, in minutes (24 h).
+pub const MAX_MINUTES: f64 = 1440.0;
+
 fn minutes_to_ms(m: f64) -> Result<i64, String> {
-    if !m.is_finite() || m <= 0.0 {
-        return Err("minutes must be greater than 0".into());
+    if !m.is_finite() || m <= 0.0 || m > MAX_MINUTES {
+        return Err(format!("minutes must be a number greater than 0 and at most {MAX_MINUTES} (24 hours), got {m}"));
     }
     Ok((m * 60_000.0).round().max(1.0) as i64)
 }

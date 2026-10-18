@@ -1,0 +1,14 @@
+{
+  "name": "commands-share-the-validity-bounds",
+  "device_id": "mac",
+  "steps": [
+    { "now_ms": 1000, "command": { "type": "start", "kind": "focus", "planned_ms": 86400001, "command_key": "k0" }, "expect": "error" },
+    { "now_ms": 2000, "command": { "type": "start", "kind": "focus", "planned_ms": 9223372036854775807, "command_key": "k1" }, "expect": "error" },
+    { "now_ms": 3000, "command": { "type": "start", "kind": "focus", "planned_ms": 86400000, "command_key": "k2" }, "expect": "ok" },
+    { "now_ms": 4000, "command": { "type": "extend", "add_ms": 86400001, "command_key": "k3" }, "expect": "error" },
+    { "now_ms": 5000, "command": { "type": "extend", "add_ms": 86400000, "command_key": "k4" }, "expect": "ok" },
+    { "now_ms": 6000, "command": { "type": "extend", "add_ms": 1, "command_key": "k5" }, "expect": "error" },
+    { "now_ms": 7000, "command": { "type": "stop", "command_key": "k6" }, "expect": "ok" }
+  ],
+  "final_event_count": 3
+}

@@ -19,7 +19,7 @@ fn tool(name: &str, description: &str, input: Value) -> Value {
 }
 
 pub fn tools() -> Vec<Value> {
-    let minutes = |d: &str| json!({"type": "number", "exclusiveMinimum": 0, "description": d});
+    let minutes = |d: &str| json!({"type": "number", "exclusiveMinimum": 0, "maximum": ops::MAX_MINUTES, "description": d});
     let text = |d: &str| json!({"type": "string", "description": d});
     let since = json!({"type": "string", "description": "Start of the window: a relative duration like `7d` or `24h`, or an ISO-8601 timestamp such as 2026-01-31T09:00:00Z. Default: all time."});
     vec![

@@ -2,9 +2,11 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
+use std::fs::File;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,7 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use pomo_core::{
     sort_events, Block, Command, Device, Error as CoreError, Event, Kind, Outcome, Phase, Range, Source, Store,
     TimerStatus, VersionVector,
@@ -28,10 +30,16 @@ use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
 pub const DEFAULT_PORT: u16 = 47831;
 const DAY_MS: i64 = 86_400_000;
+/// Concurrent `/v1/stream` connections.
+const MAX_STREAMS: usize = 16;
+/// `/v1/events`: default and maximum page size.
+const DEFAULT_EVENTS_LIMIT: usize = 1000;
+const MAX_EVENTS_LIMIT: usize = 10_000;
 
 /// Default data directory: `$POMO_HOME` or `~/.pomo`.
 pub fn default_home() -> PathBuf {
@@ -119,6 +127,8 @@ fn machine_name() -> String {
 impl Daemon {
     pub async fn start(opts: Options) -> std::io::Result<Daemon> {
         std::fs::create_dir_all(&opts.home)?;
+        // One daemon per home: a second one would run on stale cached state and race seq allocation.
+        let lock = lock_home(&opts.home)?;
         let token = load_or_create_token(&opts.home)?;
         let (mut store, key) =
             pomo_sync::open_store(&opts.home.join("pomo.db"), &opts.home.join("meta").join("key")).map_err(io_err)?;
@@ -134,6 +144,10 @@ impl Daemon {
         store.upsert_device(&device_id, &name).map_err(io_err)?;
         let store = Arc::new(Mutex::new(store));
 
+        // Bind before the sync node starts: a busy port must not leave an endpoint running.
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
+        let addr = listener.local_addr()?;
+
         let node = match opts.sync {
             SyncMode::Off => None,
             mode => {
@@ -143,9 +157,6 @@ impl Daemon {
             }
         };
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
-        let addr = listener.local_addr()?;
-
         let (tx, _) = broadcast::channel(256);
         let (sd_tx, sd_rx) = watch::channel(false);
         let shared = Arc::new(Shared {
@@ -154,6 +165,8 @@ impl Daemon {
             device_id: device_id.clone(),
             name,
             token: token.clone(),
+            port: addr.port(),
+            streams: AtomicUsize::new(0),
             tx,
             timer_task: Mutex::new(None),
             rt: tokio::runtime::Handle::current(),
@@ -173,7 +186,7 @@ impl Daemon {
 
         let app = router(shared.clone());
         let daemon_json = opts.home.join("daemon.json");
-        std::fs::write(&daemon_json, json!({"port": addr.port(), "pid": std::process::id()}).to_string())?;
+        write_private(&daemon_json, &json!({"port": addr.port(), "pid": std::process::id()}).to_string())?;
 
         let mut sd = sd_rx;
         let task = tokio::spawn(async move {
@@ -192,6 +205,8 @@ impl Daemon {
                 h.abort();
             }
             let _ = std::fs::remove_file(&daemon_json);
+            drop(shared);
+            drop(lock);
             res
         });
         Ok(Daemon { addr, token, home: opts.home, device_id, shutdown: sd_tx, task })
@@ -204,13 +219,59 @@ impl Daemon {
     }
 }
 
+/// Takes the exclusive lock `$POMO_HOME/daemon.lock`; it is held until the returned file is dropped.
+fn lock_home(home: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = home.join("daemon.lock");
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            format!("another pomod is already running on {} ({} is locked)", home.display(), path.display()),
+        )),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+fn symlink_refused(path: &Path, e: std::io::Error) -> std::io::Error {
+    if e.raw_os_error() == Some(libc::ELOOP) {
+        std::io::Error::other(format!("{} is a symlink; refusing to follow it", path.display()))
+    } else {
+        e
+    }
+}
+
+/// Reads the token, tightening group/other permissions to `0600`; creates it when absent.
+/// Never follows a symlink.
 fn load_or_create_token(home: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let path = home.join("token");
-    match std::fs::read_to_string(&path) {
-        Ok(t) if !t.trim().is_empty() => return Ok(t.trim().to_string()),
-        Ok(_) => {}
+    match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path) {
+        Ok(mut f) => {
+            let meta = f.metadata()?;
+            if !meta.is_file() {
+                return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+            }
+            if meta.permissions().mode() & 0o077 != 0 {
+                f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            let mut text = String::new();
+            f.read_to_string(&mut text)?;
+            if !text.trim().is_empty() {
+                return Ok(text.trim().to_string());
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+        Err(e) => return Err(symlink_refused(&path, e)),
     }
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -219,10 +280,18 @@ fn load_or_create_token(home: &Path) -> std::io::Result<String> {
     Ok(token)
 }
 
+/// Writes `content` to `path` with mode `0600` (also fixing an existing file's mode); never follows a symlink.
 fn write_private(path: &Path, content: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| symlink_refused(path, e))?;
     f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(content.as_bytes())
 }
@@ -254,6 +323,10 @@ struct Shared {
     device_id: String,
     name: String,
     token: String,
+    /// The bound HTTP port; a request's `Host` must name it.
+    port: u16,
+    /// Open `/v1/stream` connections.
+    streams: AtomicUsize,
     tx: broadcast::Sender<Msg>,
     timer_task: Mutex<Option<JoinHandle<()>>>,
     rt: tokio::runtime::Handle,
@@ -276,7 +349,7 @@ impl Shared {
             return;
         }
         if let (Some(block_id), Some(rem)) = (t.block_id, t.remaining_ms) {
-            let ends_ms = now + rem;
+            let ends_ms = now.saturating_add(rem);
             let tx = self.tx.clone();
             *slot = Some(self.rt.spawn(async move {
                 tokio::time::sleep(Duration::from_millis(rem.max(0) as u64)).await;
@@ -366,33 +439,71 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/pair/join", post(pair_join))
         .route("/v1/sync", post(sync))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not_found", "no such endpoint") })
-        .layer(middleware::from_fn_with_state(shared.clone(), auth))
+        .layer(middleware::from_fn_with_state(shared.clone(), guard))
         .with_state(shared)
 }
 
-async fn auth(State(sh): State<Arc<Shared>>, req: Request, next: Next) -> Response {
-    let ok = req
-        .headers()
+/// Whether a request carries a body, judged from its headers.
+fn has_body(headers: &HeaderMap) -> bool {
+    match headers.get(header::CONTENT_LENGTH) {
+        Some(v) => v.as_bytes() != b"0",
+        None => headers.contains_key(header::TRANSFER_ENCODING),
+    }
+}
+
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|m| m.trim().eq_ignore_ascii_case("application/json"))
+}
+
+/// Runs on every request, in this order: `Host` must be this daemon's loopback address (DNS
+/// rebinding), no `Origin` (a browser sent it; native clients send none), the bearer token, and
+/// a JSON content type on POSTs that carry a body (no CORS "simple request" can reach a handler).
+async fn guard(State(sh): State<Arc<Shared>>, req: Request, next: Next) -> Response {
+    let headers = req.headers();
+    let host_ok = headers.get(header::HOST).and_then(|v| v.to_str().ok()).is_some_and(|h| {
+        h.eq_ignore_ascii_case(&format!("127.0.0.1:{}", sh.port))
+            || h.eq_ignore_ascii_case(&format!("localhost:{}", sh.port))
+    });
+    if !host_ok {
+        return ApiError::new(StatusCode::FORBIDDEN, "bad_host", "Host must be 127.0.0.1:<port> or localhost:<port>")
+            .into_response();
+    }
+    if headers.contains_key(header::ORIGIN) {
+        return ApiError::new(StatusCode::FORBIDDEN, "bad_origin", "requests carrying an Origin header are refused")
+            .into_response();
+    }
+    let ok = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|t| bool::from(t.as_bytes().ct_eq(sh.token.as_bytes())))
         .unwrap_or(false);
-    if ok {
-        next.run(req).await
-    } else {
+    if !ok {
         let mut r = ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized", "missing or invalid bearer token")
             .into_response();
         r.headers_mut().insert(header::WWW_AUTHENTICATE, "Bearer".parse().unwrap());
-        r
+        return r;
     }
+    if req.method() == axum::http::Method::POST && has_body(headers) && !is_json_content_type(headers) {
+        return ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_media_type",
+            "POST bodies need Content-Type: application/json",
+        )
+        .into_response();
+    }
+    next.run(req).await
 }
 
 // ---------- JSON shapes ----------
 
 fn block_json(b: &Block, now: i64) -> Value {
     let elapsed = if b.phase == Phase::Running {
-        b.elapsed_ms + (now - b.phase_since_ms).max(0)
+        b.elapsed_ms.saturating_add(now.saturating_sub(b.phase_since_ms).max(0))
     } else {
         b.elapsed_ms
     };
@@ -415,11 +526,7 @@ fn block_json(b: &Block, now: i64) -> Value {
 fn timer_json(store: &Store, now: i64) -> Result<Value, ApiError> {
     let t = store.timer(now);
     let block = match &t.block_id {
-        Some(id) => store
-            .blocks(Range::ALL, now)?
-            .into_iter()
-            .find(|b| &b.id == id)
-            .map(|b| block_json(&b, now)),
+        Some(id) => store.block(id, now)?.map(|b| block_json(&b, now)),
         None => None,
     };
     Ok(json!({
@@ -527,10 +634,8 @@ async fn blocks(State(sh): State<Arc<Shared>>, Query(q): Query<HashMap<String, S
     };
     blocking(&sh, move |sh| {
         let now = now_ms();
-        let mut all = sh.lock_store().blocks(range, now)?;
-        all.retain(|b| kind.is_none_or(|k| b.kind == k));
-        all.sort_by(|a, b| (b.started_ms, &b.id).cmp(&(a.started_ms, &a.id)));
-        let out: Vec<Value> = all.iter().take(limit).map(|b| block_json(b, now)).collect();
+        let page = sh.lock_store().blocks_page(range, kind, limit, now)?;
+        let out: Vec<Value> = page.iter().map(|b| block_json(b, now)).collect();
         Ok(Json(json!({"blocks": out})))
     })
     .await
@@ -581,7 +686,7 @@ async fn stats(State(sh): State<Arc<Shared>>, Query(q): Query<HashMap<String, St
                 GroupBy::Project => b.project.clone().unwrap_or_default(),
             };
             let g = groups.entry(key).or_default();
-            g.0 += b.elapsed_ms;
+            g.0 = g.0.saturating_add(b.elapsed_ms);
             g.1 += u64::from(b.outcome == Some(Outcome::Completed));
         }
         let mut groups: Vec<(String, (i64, u64))> = groups.into_iter().collect();
@@ -611,29 +716,54 @@ async fn events(State(sh): State<Arc<Shared>>, Query(q): Query<HashMap<String, S
         Some(s) => serde_json::from_str(s).map_err(|e| ApiError::bad(format!("after must be a JSON version vector: {e}")))?,
     };
     let limit = match int_param(&q, "limit")? {
-        None => usize::MAX,
-        Some(l) if l >= 1 => l as usize,
+        None => DEFAULT_EVENTS_LIMIT,
+        Some(l) if l >= 1 => (l as usize).min(MAX_EVENTS_LIMIT),
         Some(_) => return Err(ApiError::bad("limit must be >= 1")),
     };
     blocking(&sh, move |sh| {
-        let mut evs = sh.lock_store().events_after(&vv)?;
+        let mut evs = sh.lock_store().events_after_limit(&vv, limit)?;
         sort_events(&mut evs);
-        evs.truncate(limit);
         Ok(Json(json!({"events": evs})))
     })
     .await
 }
 
-async fn stream(State(sh): State<Arc<Shared>>) -> Sse<impl Stream<Item = Result<sse::Event, Infallible>>> {
+/// Frees a `/v1/stream` slot when the stream is dropped.
+struct StreamSlot(Arc<Shared>);
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        self.0.streams.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+async fn stream(State(sh): State<Arc<Shared>>) -> Response {
+    if sh.streams.fetch_add(1, Ordering::SeqCst) >= MAX_STREAMS {
+        sh.streams.fetch_sub(1, Ordering::SeqCst);
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too_many_streams",
+            format!("at most {MAX_STREAMS} concurrent streams"),
+        )
+        .into_response();
+    }
+    let slot = StreamSlot(sh.clone());
     let rx = sh.tx.subscribe();
     let mut sd = sh.shutdown.clone();
     let s = BroadcastStream::new(rx)
-        .filter_map(|m| async move { m.ok() })
-        .map(|m| Ok(sse::Event::default().event(m.name).data(m.data)))
+        .map(|m| match m {
+            Ok(m) => (m.name, m.data),
+            // The client fell behind and events were dropped: it must refetch its state.
+            Err(BroadcastStreamRecvError::Lagged(n)) => ("pomo.resync", json!({"missed": n}).to_string()),
+        })
+        .map(move |(name, data)| {
+            let _slot = &slot;
+            Ok::<_, Infallible>(sse::Event::default().event(name).data(data))
+        })
         .take_until(Box::pin(async move {
             let _ = sd.wait_for(|v| *v).await;
         }));
-    Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive"))
+    Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive")).into_response()
 }
 
 // ---------- sync ----------
@@ -666,7 +796,9 @@ async fn publish_ingested(sh: Arc<Shared>) {
                     }
                 }
             }
-            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                let _ = sh.tx.send(Msg { name: "pomo.resync", data: json!({"missed": n}).to_string() });
+            }
             Err(broadcast::error::RecvError::Closed) => return,
         }
         let sh = sh.clone();

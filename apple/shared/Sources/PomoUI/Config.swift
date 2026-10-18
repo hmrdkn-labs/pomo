@@ -11,7 +11,7 @@ public struct DaemonConfig: Equatable, Sendable {
 
     public static func homeDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         if let h = environment["POMO_HOME"], !h.isEmpty { return URL(fileURLWithPath: h, isDirectory: true) }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pomo", isDirectory: true)
+        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent(".pomo", isDirectory: true)
     }
 
     public static func load(home: URL) throws -> DaemonConfig {

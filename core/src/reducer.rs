@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::types::*;
+use crate::validity::MAX_BLOCK_PLANNED_MS;
 
 /// Folded state: all blocks plus the current (running or paused) block.
 #[derive(Clone, Debug)]
@@ -80,7 +81,7 @@ impl State {
             Payload::Paused { block_id } => {
                 if let Some(b) = self.current_block_mut(&block_id) {
                     if b.phase == Phase::Running {
-                        b.elapsed_ms += t - b.phase_since_ms;
+                        b.elapsed_ms = b.elapsed_ms.saturating_add(t.saturating_sub(b.phase_since_ms));
                         b.phase = Phase::Paused;
                         b.phase_since_ms = t;
                         self.dirty.push(block_id);
@@ -98,8 +99,12 @@ impl State {
             }
             Payload::Extended { block_id, add_ms } => {
                 if let Some(b) = self.current_block_mut(&block_id) {
-                    b.planned_ms += add_ms;
-                    self.dirty.push(block_id);
+                    // Cap: an extend past 48 h in total is a no-op (the event stays in the log).
+                    let total = b.planned_ms.saturating_add(add_ms);
+                    if total <= MAX_BLOCK_PLANNED_MS {
+                        b.planned_ms = total;
+                        self.dirty.push(block_id);
+                    }
                 }
             }
             Payload::Skipped { block_id } => {
@@ -157,7 +162,7 @@ impl State {
     fn end(&mut self, id: &str, t: i64, outcome: Outcome) {
         let b = self.blocks.get_mut(id).expect("current block exists");
         if b.phase == Phase::Running {
-            b.elapsed_ms += t - b.phase_since_ms;
+            b.elapsed_ms = b.elapsed_ms.saturating_add(t.saturating_sub(b.phase_since_ms));
         }
         b.outcome = Some(outcome);
         b.ended_ms = Some(t);
@@ -206,8 +211,11 @@ impl State {
                 block_id: Some(b.id.clone()),
                 kind: Some(b.kind),
                 remaining_ms: Some(match b.phase {
-                    Phase::Running => b.planned_ms - b.elapsed_ms - (now_ms - b.phase_since_ms),
-                    _ => b.planned_ms - b.elapsed_ms,
+                    Phase::Running => b
+                        .planned_ms
+                        .saturating_sub(b.elapsed_ms)
+                        .saturating_sub(now_ms.saturating_sub(b.phase_since_ms)),
+                    _ => b.planned_ms.saturating_sub(b.elapsed_ms),
                 }),
                 next_kind,
             },

@@ -219,7 +219,7 @@ impl Payload {
         Some(match ty {
             "timer.started" => {
                 let planned_ms = m.get("planned_ms")?.as_i64()?;
-                if planned_ms <= 0 {
+                if !crate::validity::duration_in_bounds(planned_ms) {
                     return None;
                 }
                 Payload::Started {
@@ -234,7 +234,7 @@ impl Payload {
             "timer.resumed" => Payload::Resumed { block_id },
             "timer.extended" => {
                 let add_ms = m.get("add_ms")?.as_i64()?;
-                if add_ms <= 0 {
+                if !crate::validity::duration_in_bounds(add_ms) {
                     return None;
                 }
                 Payload::Extended { block_id, add_ms }
@@ -328,7 +328,8 @@ pub struct Block {
 impl Block {
     /// End time of a running block; `None` otherwise.
     pub fn ends_ms(&self) -> Option<i64> {
-        (self.phase == Phase::Running).then(|| self.phase_since_ms + self.planned_ms - self.elapsed_ms)
+        (self.phase == Phase::Running)
+            .then(|| self.phase_since_ms.saturating_add(self.planned_ms).saturating_sub(self.elapsed_ms))
     }
 
     /// The block as completed if it is running and its end time is `<= now`.
@@ -456,8 +457,13 @@ pub struct IngestReport {
     pub duplicates: usize,
     /// `(device_id, seq)` or `(device_id, command_key)` collisions with a different id.
     pub conflicts: Vec<Rejected>,
-    /// Structurally invalid events.
+    /// Structurally invalid events (see `validate_event`), and events of the same Device that
+    /// follow one in the same call.
     pub invalid: Vec<Rejected>,
+    /// Events skipped because their `hlc_ms` is more than a day ahead of this Device's clock,
+    /// and later events of the same Device in the same call. They are not stored, so the peer
+    /// offers them again at the next sync.
+    pub future: Vec<Rejected>,
 }
 
 /// A Device known to this store (`devices` table). `paired` and `revoked` are local trust

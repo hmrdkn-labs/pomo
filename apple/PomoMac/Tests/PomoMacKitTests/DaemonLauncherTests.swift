@@ -82,6 +82,44 @@ private func writeScript(_ url: URL, _ body: String) throws {
         #expect((attrs[.posixPermissions] as? Int) == 0o600)
     }
 
+    @Test func alreadyRunningExitIsSuccessWhenTheOtherDaemonBecomesLive() async throws {
+        let server = try StatusServer()
+        let home = try tempDir()
+        defer { try? FileManager.default.removeItem(at: home) }
+        // daemon.json is missing at first (so the launcher spawns), then the "other" daemon publishes it.
+        try "tok".write(to: home.appendingPathComponent("token"), atomically: true, encoding: .utf8)
+        let script = home.appendingPathComponent("pomod")
+        // Fake pomod losing the lock race: prints the real message and exits 1 right away.
+        try writeScript(script, """
+        echo "Error: another pomod is already running on $POMO_HOME ($POMO_HOME/daemon.lock is locked)" >&2
+        (sleep 0.6; echo '{"port": \(server.port), "pid": 1}' > "$POMO_HOME/daemon.json") &
+        exit 1
+        """)
+        let launcher = DaemonLauncher(home: home, binaryOverride: script, startupTimeout: .seconds(10), exitGrace: .seconds(3))
+        let client = try await launcher.connect()
+        #expect(client.config.port == server.port)
+        let log = try String(contentsOf: launcher.logURL, encoding: .utf8)
+        #expect(log.contains("already running"))
+    }
+
+    @Test func daemonThatExitsWithoutAnyLiveDaemonFailsFastWithLogPath() async throws {
+        let home = try tempDir()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try "tok".write(to: home.appendingPathComponent("token"), atomically: true, encoding: .utf8)
+        let script = home.appendingPathComponent("pomod")
+        try writeScript(script, "echo boom >&2; exit 1")
+        let launcher = DaemonLauncher(home: home, binaryOverride: script, startupTimeout: .seconds(20), exitGrace: .milliseconds(300))
+        let t0 = ContinuousClock.now
+        do {
+            _ = try await launcher.connect()
+            Issue.record("expected error")
+        } catch let e as ConnectionError {
+            #expect(e.localizedDescription.contains("exit code 1"))
+            #expect(e.localizedDescription.contains(launcher.logURL.path))
+        }
+        #expect(ContinuousClock.now - t0 < .seconds(5))
+    }
+
     @Test func missingBinaryReportsHowToFix() async throws {
         let home = try tempDir()
         defer { try? FileManager.default.removeItem(at: home) }

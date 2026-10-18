@@ -1,0 +1,65 @@
+{
+  "name": "bounds-reject-invalid-events",
+  "description": "events outside the validity bounds are rejected and never stored, so they have no effect: planned_ms over 24 h or 0, add_ms over 24 h, hlc_ms past 2100, hlc_counter over 1000000, an id that is not a lowercase UUID. A start without planned_ms is malformed: stored, ignored. Only the valid start by phone creates a block",
+  "config": { "long_break_every": 4 },
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001", "device_id": "mac", "seq": 1,
+      "hlc_ms": 1700000000000, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000a1", "kind": "focus", "planned_ms": 86400001 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002", "device_id": "phone", "seq": 1,
+      "hlc_ms": 1700000000500, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000b2", "kind": "focus", "planned_ms": 60000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003", "device_id": "laptop", "seq": 1,
+      "hlc_ms": 4102444800001, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000a3", "kind": "focus", "planned_ms": 60000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004", "device_id": "tv", "seq": 1,
+      "hlc_ms": 1700000000600, "hlc_counter": 1000001, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000a4", "kind": "focus", "planned_ms": 60000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "NOT-A-UUID", "device_id": "watch", "seq": 1,
+      "hlc_ms": 1700000000700, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000a5", "kind": "focus", "planned_ms": 60000 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006", "device_id": "pad", "seq": 1,
+      "hlc_ms": 1700000000800, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000a6", "kind": "focus", "planned_ms": 0 },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000007", "device_id": "pad2", "seq": 1,
+      "hlc_ms": 1700000000900, "hlc_counter": 0, "type": "timer.started",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000a7", "kind": "focus" },
+      "source": "user", "command_key": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000008", "device_id": "pad3", "seq": 1,
+      "hlc_ms": 1700000001000, "hlc_counter": 0, "type": "timer.extended",
+      "payload": { "block_id": "10000000-0000-4000-8000-0000000000b2", "add_ms": 86400001 },
+      "source": "user", "command_key": null
+    }
+  ],
+  "order_independent": true,
+  "checks": [
+    {
+      "now_ms": 1700000002000,
+      "timer": { "status": "running", "block_id": "10000000-0000-4000-8000-0000000000b2", "remaining_ms": 58500, "next_kind": "focus" },
+      "blocks": [
+        { "id": "10000000-0000-4000-8000-0000000000b2", "kind": "focus", "label": null, "project": null, "outcome": null, "elapsed_ms": null, "phase": "running", "planned_ms": 60000 }
+      ]
+    }
+  ]
+}

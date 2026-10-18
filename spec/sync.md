@@ -9,10 +9,13 @@ Peer-to-peer over [iroh](https://docs.iroh.computer/) connections. No server. A 
 - Frames: 4-byte big-endian length, then a UTF-8 JSON object with a `t` field. Maximum frame 4 MiB.
 - A Device remembers the last known address (the iroh endpoint ticket) of each peer it paired with or was given a ticket for, in the local `peers` table (migration `0002_peers.sql`; never synced), so it can dial by `device_id` after a restart.
 
-## Trust
+## Trust model
 
 - Only paired Devices may sync. A listener checks the remote endpoint id (authenticated by iroh) against `devices.paired = 1 AND revoked = 0`. Anything else may only perform the Pairing handshake below.
-- Events about Devices that are not the sender are accepted (Devices relay each other's events), but only from a paired peer.
+- Paired Devices are fully trusted: they are all mine. Events about Devices that are not the sender are accepted (Devices relay each other's events), but only from a paired peer. Nothing binds an event to the Device named in its `device_id`, so **a paired peer can forge events for another Device** (for example claim `(victim, seq + 1)` before the victim does, after which the victim's real event at that `seq` is a conflict). Events carry no signatures.
+- Mitigation: revoke the Device (this closes its sessions and refuses it from then on) and pair again; the other Devices' logs keep what the forger already relayed. Signing each event with its issuer's key, verified by every receiver, is a possible v2; it is deliberately out of scope for v1.
+- What a peer cannot do, because the receiver enforces it: store an event that fails the "Validity bounds" of `events.md`; make the receiver's clock jump by more than a day (events more than 24 h ahead of the receiver's wall clock are skipped and offered again later); leave a hole in a Device's `seq` run; forge events of the receiver itself (the receiver rejects `seq`s above its own maximum).
+- Resource limits: a session ends with an error once the peer has sent 50 000 events in it (what was stored stays; the next session continues), and at most 16 connections from Devices that are not trusted are served at the same time until they pair; further ones are dropped at once.
 
 ## Pairing
 
@@ -24,7 +27,7 @@ Peer-to-peer over [iroh](https://docs.iroh.computer/) connections. No server. A 
 
 1. Dialer sends `{"t":"hello","device_id":"...","vv":{"<device_id>": <max seq>, ...},"live":<bool>}`. `live` is true when the sender is a Daemon or an app in the foreground and wants the stream kept open; an absent `live` means false.
 2. Listener replies with its own `hello` (same fields, its own `live`). A Device that does not trust the peer replies `{"t":"reject","reason":"unpaired|revoked"}` and closes.
-3. Each side computes the events the other lacks (events with `seq > vv[device_id]`, in total order) and sends them as `{"t":"events","events":[...]}` frames of at most 500 events, then `{"t":"done"}`. Each side ingests received events (idempotent by id). A frame is stored all or nothing: a `(device_id, seq)` conflict anywhere in it stores nothing from the frame, aborts the session and is logged.
+3. Each side computes the events the other lacks (events with `seq > vv[device_id]`) and sends them as `{"t":"events","events":[...]}` frames of at most 500 events, then `{"t":"done"}`. Each Device's events are sent in `seq` order (never in total order), a page at a time, so a frame never skips ahead of an event the receiver has not stored; entries of `vv` above 2^63 - 1 are clamped. Each side ingests received events (idempotent by id). A frame is stored all or nothing: a `(device_id, seq)` conflict anywhere in it stores nothing from the frame, aborts the session and is logged; so does an event that fails the "Validity bounds" of `events.md` (no event of the frame is stored, so there are no `seq` holes). An event more than 24 h ahead of the receiver's clock is not an error: it and the rest of that Device's run are skipped for the session, and offered again at the next one.
 4. After both `done`s the stream stays open in **live mode** when **either** side's hello had `live: true`: each newly stored event (local or ingested) is forwarded as an `events` frame to the peer. A side that is not live, but whose peer is, has finished sending but keeps the stream until the peer sends `{"t":"bye"}` or closes. When neither hello was live, both sides send `bye` and close. A side that stops being live during the session (a Daemon never does; an app does when it goes to the background) sends `bye`. The peer's flag is the one from its hello; it is not updated mid-session.
 5. In live mode both sides send a `ping` frame every 20 s (so a side that only listens is not timed out); 60 s without any frame closes the session.
 

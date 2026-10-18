@@ -2,7 +2,7 @@
 # Assemble Pomo.app (menu bar app) with embedded pomod and pomo, ad-hoc signed.
 #
 #   scripts/bundle.sh [output-dir]       default output: apple/PomoMac/.build/bundle
-#   SKIP_RUST=1 scripts/bundle.sh        reuse the release binaries already built
+#   SKIP_RUST=1 scripts/bundle.sh        (0 or unset: build) reuse the release binaries already built
 #   POMO_VERSION=0.1.0 scripts/bundle.sh
 set -euo pipefail
 
@@ -13,7 +13,7 @@ OUT="${1:-$PKG/.build/bundle}"
 VERSION="${POMO_VERSION:-0.1.0}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/pomo-target/mac}"
 
-if [[ -z "${SKIP_RUST:-}" ]]; then
+if [[ "${SKIP_RUST:-0}" == "0" ]]; then
   (cd "$REPO" && cargo build --release -p pomod -p pomo-cli)
 fi
 for b in pomod pomo; do

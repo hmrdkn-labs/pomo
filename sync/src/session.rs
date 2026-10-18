@@ -2,10 +2,10 @@
 
 use crate::error::{Error, Result};
 use crate::node::{Inner, SyncReport};
-use crate::wire::{read_frame, write_events, write_frame, Frame};
+use crate::wire::{read_frame, write_events, write_frame, Frame, MAX_EVENTS_PER_FRAME};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
-use pomo_core::{sort_events, Event, VersionVector};
-use std::collections::BTreeMap;
+use pomo_core::{Event, VersionVector};
+use std::collections::{BTreeMap, HashSet};
 use std::pin::pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,9 @@ struct Shared {
     received: AtomicUsize,
     recv_done: watch::Sender<bool>,
     reader_end: watch::Sender<bool>,
+    /// Devices that had a far-future event skipped in this session; their later events are
+    /// ignored for the rest of the session (storing them would leave a hole).
+    held: Mutex<HashSet<String>>,
 }
 
 /// Resolves once the flag is true; the `Ref` guard never lives across a caller's await.
@@ -53,6 +56,7 @@ pub(crate) async fn run(
         received: AtomicUsize::new(0),
         recv_done: watch::channel(false).0,
         reader_end: watch::channel(false).0,
+        held: Mutex::new(HashSet::new()),
     };
     // Subscribe before the first send so a change during the initial exchange is not lost.
     let mut changed = inner.changed.subscribe();
@@ -135,13 +139,17 @@ async fn send_missing(
     shared: &Shared,
     frames: &mut usize,
 ) -> Result<()> {
-    let mut events = {
-        let vv = shared.peer_vv.lock().unwrap().clone();
-        inner.store.lock().unwrap().events_after(&vv)?
-    };
-    sort_events(&mut events);
-    let per_frame = inner.opts.events_per_frame;
-    for chunk in events.chunks(per_frame.max(1)) {
+    // Each Device's events go out in `seq` order, a page at a time, so a frame never skips ahead
+    // of an event the receiver has not stored. Total order is the receiver's business.
+    let per_frame = inner.opts.events_per_frame.clamp(1, MAX_EVENTS_PER_FRAME);
+    loop {
+        let chunk = {
+            let vv = shared.peer_vv.lock().unwrap().clone();
+            inner.store.lock().unwrap().events_after_limit(&vv, per_frame)?
+        };
+        if chunk.is_empty() {
+            return Ok(());
+        }
         let fire = {
             let mut fault = inner.fault.lock().unwrap();
             let fire = fault.is_some_and(|n| *frames >= n);
@@ -156,11 +164,10 @@ async fn send_missing(
             conn.close(7u32.into(), b"fault");
             return Err(Error::Fault);
         }
-        *frames += write_events(send, chunk, per_frame).await?;
-        advance(&mut shared.peer_vv.lock().unwrap(), chunk);
+        *frames += write_events(send, &chunk, per_frame).await?;
+        advance(&mut shared.peer_vv.lock().unwrap(), &chunk);
         shared.sent.fetch_add(chunk.len(), Ordering::SeqCst);
     }
-    Ok(())
 }
 
 async fn read_loop(inner: &Arc<Inner>, recv: &mut RecvStream, peer: &str, shared: &Shared) -> Result<()> {
@@ -176,7 +183,12 @@ async fn read_loop(inner: &Arc<Inner>, recv: &mut RecvStream, peer: &str, shared
         match frame {
             Frame::Events { events } => {
                 let n = ingest_frame(inner, peer, events, shared)?;
-                shared.received.fetch_add(n, Ordering::SeqCst);
+                let total = shared.received.fetch_add(n, Ordering::SeqCst) + n;
+                let cap = inner.opts.max_events_per_session;
+                if total > cap {
+                    tracing::warn!(peer, cap, "sync session aborted: too many events");
+                    return Err(Error::Protocol(format!("peer sent more than {cap} events in one session")));
+                }
             }
             Frame::Done => {
                 shared.recv_done.send_replace(true);
@@ -199,6 +211,10 @@ async fn read_loop(inner: &Arc<Inner>, recv: &mut RecvStream, peer: &str, shared
 fn ingest_frame(inner: &Arc<Inner>, peer: &str, events: Vec<Event>, shared: &Shared) -> Result<usize> {
     let mut store = inner.store.lock().unwrap();
     let vv = store.version_vector()?;
+    let events: Vec<Event> = {
+        let held = shared.held.lock().unwrap();
+        events.into_iter().filter(|e| !held.contains(&e.device_id)).collect()
+    };
     // Per Device: the unseen seqs must continue the stored run without holes.
     let mut unseen: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
     for e in &events {
@@ -220,16 +236,25 @@ fn ingest_frame(inner: &Arc<Inner>, peer: &str, events: Vec<Event>, shared: &Sha
         }
     }
     let keep: Vec<Event> = events.iter().filter(|e| !gapped.contains(&e.device_id)).cloned().collect();
+    // A structurally invalid event rejects the whole frame (no seq holes); far-future events
+    // are skipped, with the rest of their Device's run, and offered again at the next sync.
     let report = match store.ingest_atomic(&keep) {
         Ok(r) => r,
         Err(pomo_core::Error::Conflict(m)) => {
             tracing::warn!(peer, %m, "sync session aborted: conflict");
             return Err(Error::Conflict(m));
         }
+        Err(pomo_core::Error::InvalidArgument(m)) => {
+            tracing::warn!(peer, %m, "sync session aborted: invalid event");
+            return Err(Error::Protocol(format!("invalid event: {m}")));
+        }
         Err(e) => return Err(e.into()),
     };
-    if !report.invalid.is_empty() {
-        tracing::warn!(peer, invalid = report.invalid.len(), "peer sent invalid events");
+    if !report.future.is_empty() {
+        tracing::warn!(peer, skipped = report.future.len(), "peer sent events from the far future; will retry later");
+        let ids: HashSet<&str> = report.future.iter().map(|r| r.id.as_str()).collect();
+        let mut held = shared.held.lock().unwrap();
+        held.extend(keep.iter().filter(|e| ids.contains(e.id.as_str())).map(|e| e.device_id.clone()));
     }
     let after = store.version_vector()?;
     drop(store);

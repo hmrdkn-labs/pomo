@@ -368,3 +368,29 @@ fn mcp_get_devices_is_read_only_and_listed() {
         assert_eq!(m.tool(denied, json!({}))["isError"], true, "{denied}");
     }
 }
+
+#[test]
+fn minutes_must_be_finite_positive_and_at_most_a_day() {
+    let e = Env::new();
+    // The review's repro: `pomo start --minutes 1e30` saturated to i64::MAX and poisoned the log.
+    for bad in ["1e30", "1441", "0", "-5", "NaN", "inf", "-inf"] {
+        for cmd in ["start", "extend"] {
+            let (c, _, err) = e.pomo(&[cmd, &format!("--minutes={bad}")]);
+            assert_eq!(c, 1, "{cmd} --minutes {bad}: {err}");
+            assert!(err.contains("minutes must be") && err.contains("1440"), "{cmd} --minutes {bad}: {err}");
+        }
+    }
+    assert_eq!(e.json(&["status"])["timer"]["status"], "idle", "nothing was started");
+    assert_eq!(e.json(&["start", "--minutes", "1440"])["timer"]["block"]["planned_ms"], 86_400_000);
+    assert_eq!(e.pomo(&["extend", "--minutes", "1"]).0, 0);
+
+    // The MCP tools share the rule.
+    let mut m = Mcp::spawn(e.tmp.path());
+    m.rpc(1, "initialize", json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}));
+    m.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    for (tool, args) in [("start_focus", json!({"minutes": 1e30})), ("start_break", json!({"kind": "short", "minutes": 1441})), ("extend", json!({"minutes": 1e30}))] {
+        let res = m.tool(tool, args);
+        assert_eq!(res["isError"], true, "{tool}");
+        assert!(res["content"][0]["text"].as_str().unwrap().contains("1440"), "{tool}: {res}");
+    }
+}

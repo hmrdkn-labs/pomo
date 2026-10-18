@@ -26,6 +26,7 @@ let package = Package(
                 .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("CoreFoundation"),
+                .linkedFramework("Network"),
             ]
         ),
         .target(

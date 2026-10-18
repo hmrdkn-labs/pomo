@@ -13,13 +13,17 @@ Store::open_in_memory_with(device_id, config: Config) -> Result<Store>
 
 store.device_id() -> &str
 store.apply(cmd: Command, source: Source, now_ms: i64) -> Result<Event>        // HLC, seq, command_key idempotency, validity
-store.ingest(events: &[Event]) -> Result<IngestReport>                          // idempotent by id; seq/command_key conflicts rejected into report.conflicts
-store.ingest_atomic(events: &[Event]) -> Result<IngestReport>                   // same, but any conflict -> Err(Error::Conflict), nothing stored
+store.ingest(events: &[Event]) -> Result<IngestReport>                          // idempotent by id; seq/command_key conflicts -> report.conflicts; invalid -> report.invalid; far-future -> report.future; a Device stops at its first rejected event (no seq holes)
+store.ingest_atomic(events: &[Event]) -> Result<IngestReport>                   // same, but any conflict -> Err(Error::Conflict), any invalid event -> Err(Error::InvalidArgument), nothing stored
+store.set_clock(f: impl Fn() -> i64 + Send + Sync + 'static)                    // wall clock for the far-future check (default: system clock); tests inject
 store.version_vector() -> Result<VersionVector>                                 // BTreeMap<device_id, max seq>
 store.events_after(vv: &VersionVector) -> Result<Vec<Event>>                    // ordered by (device_id, seq)
+store.events_after_limit(vv, limit: usize) -> Result<Vec<Event>>                // first `limit` of the above, SQL LIMIT; a seq prefix per Device
 store.events() -> Result<Vec<Event>>                                            // total order
 store.timer(now_ms: i64) -> TimerView
 store.blocks(range: Range, now_ms: i64) -> Result<Vec<Block>>                   // from `blocks` table, settled at now_ms
+store.block(id: &str, now_ms: i64) -> Result<Option<Block>>                     // one block, settled at now_ms
+store.blocks_page(range, kind: Option<Kind>, limit, now_ms) -> Result<Vec<Block>> // newest first; range, kind and limit applied in SQL
 store.projected_blocks(range: Range) -> Result<Vec<Block>>                      // raw table rows == fold(events)
 store.stats(range: Range, tz_offset_min: i32, now_ms: i64) -> Result<Stats>
 store.rebuild_projections() -> Result<()>
@@ -36,9 +40,10 @@ store.peer_address(id) -> Result<Option<String>>
 store.set_peer_address(id, address, now_ms) -> Result<()>
 ```
 
-`apply` errors and writes nothing when the command is not valid: `InvalidArgument` (non-positive `planned_ms`/`add_ms`), `InvalidState` (nothing to pause, no live block, ...), `NotFound` (unknown block id). A used `(device_id, command_key)` returns the original event.
-A store is bound to the `device_id` it was created with (`Error::DeviceMismatch` otherwise).
-Ingest does not require gap-free `seq`; `events_after` uses max seq per device, so peers must ship each device's events in `seq` order without holes (the sync layer's job).
+Events are checked by `validate_event` on ingest and when `apply` issues them (spec/events.md, "Validity bounds": UUID ids, 128-byte identifiers, 16 KiB payload, `hlc_ms` up to 2100, `hlc_counter` up to 1 000 000, `planned_ms`/`add_ms` in 1..=24 h). A block never exceeds 48 h in total: the reducer ignores an extend past it.
+`apply` errors and writes nothing when the command is not valid: `InvalidArgument` (`planned_ms`/`add_ms` outside 1..=24 h, a block past 48 h, any event field out of bounds), `InvalidState` (nothing to pause, no live block, ...), `NotFound` (unknown block id). A used `(device_id, command_key)` returns the original event.
+A store is bound to the `device_id` it was created with (`Error::DeviceMismatch` otherwise). Creating the store and every migration run in one transaction with the `schema_version` bump; a store with a newer or unreadable `schema_version` is refused with `Error::InvalidState`.
+Ingest of separate calls does not require gap-free `seq` (one call never creates a hole itself: it stops a Device at its first invalid or far-future event); `events_after` uses max seq per device, so peers must ship each Device's events in `seq` order without holes (the sync layer's job).
 
 ## Pure reducer
 
@@ -63,7 +68,7 @@ Command { body: CommandBody, command_key: Option<String> }   // JSON: {"type":"s
 CommandBody::{ Start{kind,planned_ms,label,project}, Pause, Resume, Extend{add_ms}, Skip, Stop, Reset, Label{block_id,label,project} }
 Range { from_ms, to_ms }  // half-open on started_ms; Range::ALL
 Stats { focus_ms_by_day: BTreeMap<"YYYY-MM-DD", i64>, focus_ms_total, completed_focus, streak_days }
-IngestReport { inserted, duplicates, conflicts: Vec<Rejected>, invalid: Vec<Rejected> }
+IngestReport { inserted, duplicates, conflicts: Vec<Rejected>, invalid: Vec<Rejected>, future: Vec<Rejected> }
 Device { device_id, name: Option<String>, paired, revoked }
 Error::{ Db, Json, InvalidArgument, InvalidState, NotFound, Conflict, DeviceMismatch }
 ```

@@ -31,7 +31,7 @@ Apple targets need Xcode (Swift 6 toolchain) and, for the iPhone project, [Xcode
 2. `cargo test --workspace` and clippy with `-D warnings` must pass. For Apple changes run `swift test` in the
    packages you touched.
 3. Describe what you ran and what you could not verify (for example, behaviour that needs a physical device).
-4. By contributing you agree your work is licensed under the project's dual MIT OR Apache-2.0 licence.
+4. By contributing you agree your work is licensed under the project's MIT licence.
 
 ## Reporting bugs
 

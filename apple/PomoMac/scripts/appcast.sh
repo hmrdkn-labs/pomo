@@ -4,7 +4,7 @@
 # Run once the DMG is final (stapled); release.sh then attaches the feed to the v<version> release, which the app
 # reads at releases/latest/download/appcast.xml. Start from the previous release's feed to keep its items.
 # The app inside the DMG must be this version; its CFBundleVersion is the Sparkle build number.
-# The DMG is signed with the EdDSA private key exported to ~/.private_keys/sparkle_ed25519 (or $SPARKLE_KEY);
+# The DMG is signed with the EdDSA private key exported to ~/.private_keys/pomo_ed25519 (Pomo's own key, not Agent Awake's; or $SPARKLE_KEY);
 # its public half is SUPublicEDKey in the app Info.plist (bundle.sh, from SPARKLE_PUBLIC_KEY).
 set -eu
 cd "$(dirname "$0")/.."
@@ -13,8 +13,8 @@ DMG=${2:?usage: scripts/appcast.sh <version> <dmg> [appcast.xml]}
 OUT=${3:-.build/bundle/appcast.xml}
 REPO="${REPO:-hmrdkn-labs/pomo}"
 SIGN=.build/artifacts/sparkle/Sparkle/bin/sign_update  # in this package's .build after swift build
-KEY="${SPARKLE_KEY:-$HOME/.private_keys/sparkle_ed25519}"
-[ -f "$KEY" ] || { echo "Sparkle EdDSA private key not found: $KEY (export it with generate_keys -x, or set SPARKLE_KEY)" >&2; exit 1; }
+KEY="${SPARKLE_KEY:-$HOME/.private_keys/pomo_ed25519}"
+[ -f "$KEY" ] || { echo "Sparkle EdDSA private key not found: $KEY (export it with generate_keys --account dev.hamardikan.pomo -x $KEY, or set SPARKLE_KEY)" >&2; exit 1; }
 [ -x "$SIGN" ] || { echo "$SIGN missing: run swift package resolve" >&2; exit 1; }
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 1; }
 

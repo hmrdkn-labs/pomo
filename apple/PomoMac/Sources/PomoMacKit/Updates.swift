@@ -30,7 +30,8 @@ public enum Updates {
 
         func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem,
                                                        state: SPUUserUpdateState) {
-            if handleShowingUpdate { NSApp.activate(ignoringOtherApps: true) }
+            // Sparkle calls its user driver delegate on the main thread.
+            if handleShowingUpdate { MainActor.assumeIsolated { NSApp.activate(ignoringOtherApps: true) } }
         }
     }
 }

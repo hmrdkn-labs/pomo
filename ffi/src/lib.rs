@@ -252,7 +252,7 @@ impl CoreCommand {
     fn into_body(self) -> CommandBody {
         match self {
             CoreCommand::Start { kind, planned_ms, label, project } => {
-                CommandBody::Start { kind: kind.into(), planned_ms, label, project }
+                CommandBody::Start { kind: kind.into(), planned_ms, label, project, if_idle: false }
             }
             CoreCommand::Pause => CommandBody::Pause,
             CoreCommand::Resume => CommandBody::Resume,

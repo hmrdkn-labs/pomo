@@ -381,6 +381,9 @@ pub enum CommandBody {
         label: Option<String>,
         #[serde(default)]
         project: Option<String>,
+        /// Refuse with `InvalidState` instead of abandoning a live block.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        if_idle: bool,
     },
     Pause,
     Resume,

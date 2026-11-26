@@ -270,6 +270,43 @@ fn mcp_stdio_session() {
 }
 
 #[test]
+fn mcp_start_refuses_over_a_live_block_unless_replace() {
+    let e = Env::new();
+    e.json(&["start", "--minutes", "30", "--label", "human"]);
+    let mut m = Mcp::spawn(e.tmp.path());
+
+    for (tool, args) in [("start_focus", json!({"label": "agent"})), ("start_break", json!({"kind": "short"}))] {
+        let res = m.tool(tool, args);
+        assert_eq!(res["isError"], true, "{tool}");
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("focus \"human\"") && text.contains("user"), "{text}");
+        let st = e.json(&["status"]);
+        assert_eq!(st["timer"]["status"], "running");
+        assert_eq!(st["timer"]["block"]["label"], "human");
+    }
+    assert_eq!(e.json(&["blocks"])["blocks"].as_array().unwrap().len(), 1);
+
+    let res = m.tool("start_focus", json!({"label": "agent", "replace": true}));
+    assert_eq!(res["isError"], false);
+    let blocks = e.json(&["blocks"]);
+    let blocks = blocks["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2);
+    let human = blocks.iter().find(|b| b["label"] == "human").unwrap();
+    assert_eq!(human["outcome"], "abandoned");
+    assert_eq!(e.json(&["status"])["timer"]["block"]["label"], "agent");
+}
+
+#[test]
+fn cli_start_if_idle_fails_over_a_live_block() {
+    let e = Env::new();
+    e.json(&["start", "--label", "first"]);
+    let (code, _, err) = e.pomo(&["start", "--if-idle", "--label", "second"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("already running"), "{err}");
+    assert_eq!(e.json(&["status"])["timer"]["block"]["label"], "first");
+}
+
+#[test]
 fn mcp_source_falls_back_to_agent_mcp() {
     let e = Env::new();
     let mut m = Mcp::spawn(e.tmp.path());

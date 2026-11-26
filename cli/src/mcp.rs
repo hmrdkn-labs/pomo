@@ -22,26 +22,29 @@ pub fn tools() -> Vec<Value> {
     let minutes = |d: &str| json!({"type": "number", "exclusiveMinimum": 0, "maximum": ops::MAX_MINUTES, "description": d});
     let text = |d: &str| json!({"type": "string", "description": d});
     let since = json!({"type": "string", "description": "Start of the window: a relative duration like `7d` or `24h`, or an ISO-8601 timestamp such as 2026-01-31T09:00:00Z. Default: all time."});
+    let replace = json!({"type": "boolean", "description": "Abandon a live block and start anyway (default false: refuse if a block is live)."});
     vec![
         tool(
             "start_focus",
-            "Start a focus block now. Always allowed: a block that is already running or paused is ended as abandoned first. Default length 25 minutes.",
+            "Start a focus block now. Refused with an error naming the live block if one is already running or paused (it may be the user's own); pass replace: true to abandon it and start anyway. Default length 25 minutes.",
             schema(
                 json!({
                     "minutes": minutes("Planned length in minutes (default 25)."),
                     "label": text("What the work is."),
                     "project": text("Optional project the label belongs to."),
+                    "replace": replace.clone(),
                 }),
                 &[],
             ),
         ),
         tool(
             "start_break",
-            "Start a short or long break now. Always allowed: a live block is ended as abandoned first. Defaults: short 5 minutes, long 15.",
+            "Start a short or long break now. Refused with an error naming the live block if one is already running or paused; pass replace: true to abandon it and start anyway. Defaults: short 5 minutes, long 15.",
             schema(
                 json!({
                     "kind": {"type": "string", "enum": ["short", "long"], "description": "Break kind."},
                     "minutes": minutes("Planned length in minutes."),
+                    "replace": replace,
                 }),
                 &["kind"],
             ),
@@ -126,6 +129,14 @@ fn str_arg<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
     }
 }
 
+fn bool_arg(args: &Value, key: &str) -> Result<bool, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(format!("{key} must be a boolean")),
+    }
+}
+
 fn num_arg(args: &Value, key: &str) -> Result<Option<f64>, String> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -146,13 +157,14 @@ fn plan(name: &str, args: &Value) -> Result<Call, String> {
             num_arg(args, "minutes")?,
             str_arg(args, "label")?,
             str_arg(args, "project")?,
+            !bool_arg(args, "replace")?,
         )?)),
         "start_break" => {
             let kind = str_arg(args, "kind")?.ok_or("kind is required (short or long)")?;
             if kind != "short" && kind != "long" {
                 return Err("kind must be short or long".into());
             }
-            Ok(Call::Command(ops::start_body(kind, num_arg(args, "minutes")?, None, None)?))
+            Ok(Call::Command(ops::start_body(kind, num_arg(args, "minutes")?, None, None, !bool_arg(args, "replace")?)?))
         }
         "pause" => simple("pause"),
         "resume" => simple("resume"),

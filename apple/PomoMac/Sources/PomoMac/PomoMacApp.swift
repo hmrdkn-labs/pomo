@@ -5,6 +5,8 @@ import SwiftUI
 struct PomoMacApp: App {
     @State private var env = AppEnvironment()
 
+    init() { Updates.start() }
+
     var body: some Scene {
         MenuBarExtra {
             PopoverView(env: env)

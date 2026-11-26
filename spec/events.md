@@ -119,7 +119,7 @@ A Command is a request that the Core validates against the current state at wall
 
 | Command | Valid when | Events |
 | --- | --- | --- |
-| `start(kind, planned_ms, label?, project?)` | `planned_ms` in `1..=86_400_000` | `timer.started` with a new `block_id` |
+| `start(kind, planned_ms, label?, project?, if_idle?)` | `planned_ms` in `1..=86_400_000`; with `if_idle: true` (default false) also no live block, else the Command fails with `invalid_state` and writes nothing | `timer.started` with a new `block_id` |
 | `pause` | a block is running | `timer.paused` |
 | `resume` | a block is paused | `timer.resumed` |
 | `extend(add_ms)` | a block is live and `planned_ms + add_ms <= 172_800_000` (else an invalid-argument error: the reducer would ignore it) | `timer.extended` |

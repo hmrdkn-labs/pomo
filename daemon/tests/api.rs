@@ -207,6 +207,22 @@ fn invalid_commands_are_400_or_409_and_write_nothing() {
 }
 
 #[test]
+fn start_if_idle_over_a_live_block_is_409_and_leaves_it_running() {
+    let td = Td::new();
+    let (c, _) = td.cmd(json!({"type":"start","kind":"focus","planned_ms":60000,"label":"human"}));
+    assert_eq!(c, 200);
+    let (c, b) = td.cmd(json!({"type":"start","kind":"focus","planned_ms":60000,"label":"agent","if_idle":true}));
+    assert_eq!((c, b["error"]["code"].as_str()), (409, Some("invalid_state")));
+    let msg = b["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("focus \"human\"") && msg.contains("user"), "{msg}");
+    assert_eq!(td.get("/v1/events").1["events"].as_array().unwrap().len(), 1);
+    assert_eq!(td.get("/v1/status").1["timer"]["block"]["label"], "human");
+    // Idle is fine.
+    assert_eq!(td.cmd(json!({"type":"stop"})).0, 200);
+    assert_eq!(td.cmd(json!({"type":"start","kind":"focus","planned_ms":60000,"if_idle":true})).0, 200);
+}
+
+#[test]
 fn source_header_sets_event_and_block_source() {
     let td = Td::new();
     let (c, r) = td.call("POST", "/v1/commands", Some(start(60000, None)), &[("X-Pomo-Source", "agent:claude-code")], Some(&td.token));

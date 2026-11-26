@@ -12,6 +12,7 @@ fn random_command(rng: &mut StdRng) -> CommandBody {
             planned_ms: rng.gen_range(1..40) * 60_000,
             label: rng.gen_bool(0.5).then(|| format!("l{}", rng.gen_range(0..5))),
             project: None,
+            if_idle: false,
         },
         2 => CommandBody::Pause,
         3 => CommandBody::Resume,

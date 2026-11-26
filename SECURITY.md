@@ -26,7 +26,8 @@ Pomo is a personal tool. These are the intended boundaries:
   misbehaving peer can do.
 - **Agents.** An agent with access to the API token or the `pomo` CLI can start, stop and label blocks and read
   your history. It cannot reach other devices except through sync with a paired device.
-- **No telemetry.** Pomo sends no analytics or crash reports.
+- **No telemetry.** Pomo sends no analytics or crash reports. The Mac app checks for updates once a day by fetching
+  the release appcast from GitHub; you can turn this off in Settings.
 
 ## Known limitations
 

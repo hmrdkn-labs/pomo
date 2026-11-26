@@ -47,6 +47,7 @@ pub fn start_body(
     minutes: Option<f64>,
     label: Option<&str>,
     project: Option<&str>,
+    if_idle: bool,
 ) -> Result<Value, String> {
     let (kind, default_min) = match kind {
         "focus" => ("focus", 25.0),
@@ -60,6 +61,9 @@ pub fn start_body(
     }
     if let Some(p) = project {
         b["project"] = json!(p);
+    }
+    if if_idle {
+        b["if_idle"] = json!(true);
     }
     Ok(b)
 }

@@ -117,7 +117,7 @@ async fn r3_2_far_future_events_are_skipped_without_holes_and_arrive_when_the_cl
     let future = start(&b, T0 + 2 * DAY);
     let later = start(&b, T0 + 2 * DAY + 1000);
     a.store().lock().unwrap().apply(
-        Command { body: CommandBody::Start { kind: Kind::Focus, planned_ms: 60_000, label: None, project: None }, command_key: None },
+        Command { body: CommandBody::Start { kind: Kind::Focus, planned_ms: 60_000, label: None, project: None, if_idle: false }, command_key: None },
         Source::User,
         T0 + 10,
     )

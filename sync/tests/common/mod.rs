@@ -35,7 +35,7 @@ pub fn trust(a: &T, b: &T) {
 pub const T0: i64 = 1_700_000_000_000;
 
 pub fn start(node: &SyncNode, at: i64) -> Event {
-    cmd(node, CommandBody::Start { kind: Kind::Focus, planned_ms: 25 * 60_000, label: None, project: None }, at)
+    cmd(node, CommandBody::Start { kind: Kind::Focus, planned_ms: 25 * 60_000, label: None, project: None, if_idle: false }, at)
         .expect("start is always valid")
 }
 

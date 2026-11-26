@@ -494,9 +494,19 @@ impl Store {
             Error::InvalidArgument(format!("{name} must be in {MIN_DURATION_MS}..={MAX_DURATION_MS} (24 h)"))
         };
         let payload = match cmd.body {
-            CommandBody::Start { kind, planned_ms, label, project } => {
+            CommandBody::Start { kind, planned_ms, label, project, if_idle } => {
                 if !duration_in_bounds(planned_ms) {
                     return Err(duration_error("planned_ms"));
+                }
+                if if_idle {
+                    if let Some(b) = live.as_ref().and_then(|id| blocks.iter().find(|b| b.id == *id)) {
+                        return Err(Error::InvalidState(format!(
+                            "a block is already running: {} \"{}\" started by {}",
+                            b.kind.as_str(),
+                            b.label.as_deref().unwrap_or(""),
+                            b.source
+                        )));
+                    }
                 }
                 Payload::Started { block_id: new_uuid(), kind, planned_ms, label, project }
             }

@@ -36,16 +36,24 @@ enum Cmd {
         label: Option<String>,
         #[arg(long)]
         project: Option<String>,
+        /// Fail instead of replacing a block that is already running.
+        #[arg(long)]
+        if_idle: bool,
     },
+    /// Pause the running block.
     Pause,
+    /// Resume the paused block.
     Resume,
     /// Add time to the live block.
     Extend {
         #[arg(long)]
         minutes: f64,
     },
+    /// Skip the live block; it is recorded as skipped.
     Skip,
+    /// Stop the live block early; it is recorded as abandoned.
     Stop,
+    /// Restart the live block from its planned length.
     Reset,
     /// Set the label of a block (default: current, else most recent).
     Label {
@@ -55,7 +63,9 @@ enum Cmd {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Show the timer state and today's focus time.
     Status,
+    /// List recorded blocks, newest first.
     Blocks {
         /// 7d, 24h or an ISO-8601 timestamp.
         #[arg(long)]
@@ -63,12 +73,14 @@ enum Cmd {
         #[arg(long)]
         limit: Option<u32>,
     },
+    /// Show focus totals, grouped by day, label or project.
     Stats {
         #[arg(long)]
         since: Option<String>,
         #[arg(long, value_parser = ["day", "label", "project"])]
         by: Option<String>,
     },
+    /// Print the event log, or stream new events.
     Events {
         /// Stream new events until interrupted.
         #[arg(long)]
@@ -331,8 +343,8 @@ fn main() -> ExitCode {
         Follow,
     }
     let req = match &cli.cmd {
-        Cmd::Start { kind, minutes, label, project } => {
-            ops::start_body(kind, *minutes, label.as_deref(), project.as_deref()).map(Req::Command)
+        Cmd::Start { kind, minutes, label, project, if_idle } => {
+            ops::start_body(kind, *minutes, label.as_deref(), project.as_deref(), *if_idle).map(Req::Command)
         }
         Cmd::Pause => Ok(Req::Command(serde_json::json!({"type": "pause"}))),
         Cmd::Resume => Ok(Req::Command(serde_json::json!({"type": "resume"}))),

@@ -110,7 +110,7 @@ fn ingest_rejects_seq_conflict_and_is_idempotent() {
 #[test]
 fn hlc_rule_and_seq_allocation() {
     let mut s = Store::open_in_memory("me").unwrap();
-    let start = Command { body: CommandBody::Start { kind: Kind::Focus, planned_ms: 60_000, label: None, project: None }, command_key: None };
+    let start = Command { body: CommandBody::Start { kind: Kind::Focus, planned_ms: 60_000, label: None, project: None, if_idle: false }, command_key: None };
     let e1 = s.apply(start.clone(), Source::User, 1000).unwrap();
     assert_eq!((e1.seq, e1.hlc_ms, e1.hlc_counter), (1, 1000, 0));
     // clock not advancing, then going backwards
@@ -130,7 +130,7 @@ fn commands_validate_and_are_idempotent() {
     let mut s = Store::open_in_memory("me").unwrap();
     let c = |body, key: &str| Command { body, command_key: Some(key.into()) };
     assert!(s.apply(c(CommandBody::Pause, "p0"), Source::User, 1).is_err());
-    let start = c(CommandBody::Start { kind: Kind::Focus, planned_ms: 1000, label: None, project: None }, "s");
+    let start = c(CommandBody::Start { kind: Kind::Focus, planned_ms: 1000, label: None, project: None, if_idle: false }, "s");
     let e = s.apply(start.clone(), Source::User, 10).unwrap();
     assert_eq!(s.apply(start, Source::User, 99).unwrap(), e);
     assert!(s.apply(c(CommandBody::Resume, "r"), Source::User, 20).is_err());
@@ -152,7 +152,7 @@ fn commands_validate_and_are_idempotent() {
 fn two_stores_converge_through_version_vectors() {
     let mut a = Store::open_in_memory("a").unwrap();
     let mut b = Store::open_in_memory("b").unwrap();
-    let start = |k: &str| Command { body: CommandBody::Start { kind: Kind::Focus, planned_ms: 60_000, label: None, project: None }, command_key: Some(k.into()) };
+    let start = |k: &str| Command { body: CommandBody::Start { kind: Kind::Focus, planned_ms: 60_000, label: None, project: None, if_idle: false }, command_key: Some(k.into()) };
     a.apply(start("1"), Source::User, 1000).unwrap();
     b.apply(start("1"), Source::User, 1000).unwrap();
     a.apply(Command { body: CommandBody::Pause, command_key: None }, Source::User, 2000).unwrap();
@@ -194,10 +194,10 @@ fn error_variants_are_typed() {
     let mut s = Store::open_in_memory("me").unwrap();
     let cmd = |body| Command { body, command_key: None };
     assert!(matches!(s.apply(cmd(CommandBody::Pause), Source::User, 1), Err(Error::InvalidState(_))));
-    let bad = CommandBody::Start { kind: Kind::Focus, planned_ms: 0, label: None, project: None };
+    let bad = CommandBody::Start { kind: Kind::Focus, planned_ms: 0, label: None, project: None, if_idle: false };
     assert!(matches!(s.apply(cmd(bad), Source::User, 1), Err(Error::InvalidArgument(_))));
     assert!(matches!(s.apply(cmd(CommandBody::Extend { add_ms: -5 }), Source::User, 1), Err(Error::InvalidArgument(_))));
-    let start = CommandBody::Start { kind: Kind::Focus, planned_ms: 1000, label: None, project: None };
+    let start = CommandBody::Start { kind: Kind::Focus, planned_ms: 1000, label: None, project: None, if_idle: false };
     s.apply(cmd(start), Source::User, 2).unwrap();
     let unknown = CommandBody::Label { block_id: Some("nope".into()), label: Some("x".into()), project: None };
     assert!(matches!(s.apply(cmd(unknown), Source::User, 3), Err(Error::NotFound(_))));

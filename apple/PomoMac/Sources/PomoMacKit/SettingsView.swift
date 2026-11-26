@@ -6,6 +6,7 @@ public struct SettingsView: View {
     var env: AppEnvironment
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
+    @State private var checksForUpdates = Updates.checksAutomatically
     @Environment(\.pomoTheme) private var theme
 
     public init(env: AppEnvironment) { self.env = env }
@@ -27,6 +28,12 @@ public struct SettingsView: View {
                 if let loginError { Text(loginError).pomoFont(.secondary).foregroundStyle(theme.danger) }
                 Toggle("Show Dock icon", isOn: $s.showDockIcon)
                     .onChange(of: s.showDockIcon) { _, _ in env.applyDockPolicy() }
+                if Updates.controller != nil {
+                    Toggle("Check for updates daily", isOn: $checksForUpdates)
+                        .onChange(of: checksForUpdates) { _, on in Updates.checksAutomatically = on }
+                    Text("Once a day Pomo asks GitHub for the latest version. That request is all it sends; there is no analytics.")
+                        .pomoFont(.secondary).foregroundStyle(theme.inkMuted)
+                }
             }
             .listRowBackground(theme.paperRaised)
             Section("Shortcuts") {
@@ -50,7 +57,10 @@ public struct SettingsView: View {
         .foregroundStyle(theme.ink)
         .tint(theme.ink)
         .frame(minWidth: 480, maxWidth: 480, minHeight: 420, idealHeight: 720)
-        .onAppear { openAtLogin = SMAppService.mainApp.status == .enabled }
+        .onAppear {
+            openAtLogin = SMAppService.mainApp.status == .enabled
+            checksForUpdates = Updates.checksAutomatically
+        }
     }
 
     private func setLogin(_ on: Bool) {

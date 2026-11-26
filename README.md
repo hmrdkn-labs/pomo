@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE-MIT"><img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-1B1613"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1B1613"></a>
   <img alt="Rust 2021" src="https://img.shields.io/badge/rust-2021-D63A22">
   <img alt="Status: early" src="https://img.shields.io/badge/status-early-6F655B">
 </p>
@@ -23,25 +23,36 @@
 
 Most timers keep your time on someone else's server and cannot be driven by your tools. Pomo keeps one live timer and one history across your own devices, stores everything in a SQLite file you own, and gives your AI assistant the same controls you have: it can start a block, pause it, and tell you where the week went.
 
-- **Local only.** No account, no hosted backend, no analytics. Devices talk directly to each other over [iroh](https://iroh.computer) (end-to-end encrypted). Relays are used only to connect; you can self-host one.
+- **Local only.** No account, no hosted backend, no analytics. The Mac app makes one request a day to GitHub to fetch the update appcast; turn it off in Settings. Devices talk directly to each other over [iroh](https://iroh.computer) (end-to-end encrypted). Relays are used only to connect; you can self-host one.
 - **Native shells.** A SwiftUI menu bar app on the Mac and a SwiftUI app on iPhone with a Live Activity and widget. The shared logic is a Rust core, not a UI runtime.
-- **Agent friendly.** A localhost HTTP API, a `pomo` CLI with `--json`, and an MCP server over stdio. Every command is idempotent and every block records who started it.
+- **Agent friendly.** A localhost HTTP API, a `pomo` CLI with `--json`, and an MCP server over stdio. Commands accept an idempotency key, and every block records who started it.
 - **Correct by construction.** The timer is an event log folded by a pure function; remaining time comes from absolute timestamps, so devices never drift and a block that ends while an app is closed is still recorded correctly. A shared set of [test vectors](spec/vectors) defines the behaviour for any port.
 
 ## Status
 
-Early. The Rust core, sync, daemon, CLI and MCP server are tested and have been through two independent reviews. The Mac and iPhone apps run, and the iPhone app is exercised end to end in the simulator by an XCUITest suite. Not yet done: App Store and notarised builds, Android, Windows, Linux and web, App Intents, and testing on real phones. See [docs/roadmap.md](docs/roadmap.md).
+Early. The Rust core, sync, daemon, CLI and MCP server are covered by automated tests (see [Build and test](#build-and-test)). The Mac and iPhone apps run, and the iPhone app is exercised end to end in the simulator by an XCUITest suite. Not yet done: App Store and notarised builds, Android, Windows, Linux and web, App Intents, and testing on real phones. See [docs/roadmap.md](docs/roadmap.md).
 
 | Part | State |
 | --- | --- |
-| Rust core, sync, daemon, CLI, MCP | working, 100+ tests |
-| Mac menu bar app | working, unsigned build |
+| Rust core, sync, daemon, CLI, MCP | working; 88 tests pass, 1 ignored (needs internet) |
+| Mac menu bar app | working; signed, notarised release flow is in place, first release not yet published |
 | iPhone app, Live Activity, widget | working in the simulator, not tested on a device |
 | Other platforms | not started |
 
 ## Quick start (Mac)
 
-Requirements: macOS 14+, Rust (stable), Xcode (Swift 6 toolchain).
+Requirements: macOS 14+.
+
+```sh
+brew install --cask hmrdkn-labs/tap/pomo     # available from v0.1.0
+open -a Pomo
+```
+
+The cask installs `Pomo.app` and puts the `pomo` CLI on your `PATH`. Pomo appears in the menu bar and starts its daemon automatically. On a crowded menu bar it may sit behind the overflow chevron. Data lives in `~/.pomo` (override with `POMO_HOME`). The app checks GitHub once a day for updates; turn that off in Settings.
+
+### Build from source (needs full Xcode, not just the Command Line Tools)
+
+Also needs Rust (stable) and the Swift 6 toolchain that ships with Xcode.
 
 ```sh
 git clone https://github.com/hmrdkn-labs/pomo
@@ -51,13 +62,11 @@ cp -R apple/PomoMac/.build/bundle/Pomo.app /Applications/
 open /Applications/Pomo.app
 ```
 
-Pomo appears in the menu bar and starts its daemon automatically. On a crowded menu bar it may sit behind the overflow chevron. Data lives in `~/.pomo` (override with `POMO_HOME`).
-
-Or use only the daemon and CLI:
+Or use only the daemon and CLI (no Xcode needed):
 
 ```sh
 cargo build --release -p pomod -p pomo-cli
-target/release/pomod &                                  # agent API on 127.0.0.1:47831
+target/release/pomod &
 target/release/pomo start --minutes 25 --label "write the spec"
 target/release/pomo status
 target/release/pomo stats --since 7d --by label
@@ -75,13 +84,26 @@ pomo stats --since 7d --by label --json
 pomo events --follow          # stream events, including block_end
 ```
 
-**MCP.** Register `pomo mcp` as a stdio server in any MCP client:
+**MCP.** `pomo mcp` is a stdio MCP server that talks to the running daemon. With the cask, `pomo` is on your `PATH`; from a source build it is `Pomo.app/Contents/Helpers/pomo`, so use that full path as the command.
+
+```sh
+# Claude Code
+claude mcp add pomo -- pomo mcp
+```
+
+```toml
+# Codex: ~/.codex/config.toml
+[mcp_servers.pomo]
+command = "pomo"
+args = ["mcp"]
+```
 
 ```json
+// omp: ~/.omp/agent/mcp.json
 { "mcpServers": { "pomo": { "command": "pomo", "args": ["mcp"] } } }
 ```
 
-Tools: `start_focus`, `start_break`, `pause`, `resume`, `stop`, `skip`, `extend`, `reset`, `label_block`, `get_status`, `list_blocks`, `get_stats`, `get_devices`.
+Tools: `start_focus`, `start_break`, `pause`, `resume`, `stop`, `skip`, `extend`, `reset`, `label_block`, `get_status`, `list_blocks`, `get_stats`, `get_devices`. `start_focus` and `start_break` refuse to start over a running block unless called with `replace: true`, which abandons it.
 
 **HTTP.** The daemon listens on `127.0.0.1` only and requires a bearer token (`~/.pomo/token`, mode 600). See [spec/api.md](spec/api.md).
 
@@ -124,7 +146,7 @@ Design decisions are recorded in [docs/adr](docs/adr). The glossary is in [CONTE
 ## Build and test
 
 ```sh
-cargo test --workspace                       # Rust: core, sync, daemon, CLI, FFI
+cargo test --workspace                       # Rust: core, sync, daemon, CLI, FFI (88 pass, 1 ignored)
 cargo clippy --workspace --all-targets -- -D warnings
 (cd apple/shared  && swift test)             # design system and view models
 (cd apple/PomoKit && swift test)             # needs apple/PomoKit/scripts/build-xcframework.sh first
@@ -153,4 +175,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Report vu
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option. Unless you state otherwise, any contribution you submit is dual licensed as above, without additional terms.
+Licensed under the [MIT license](LICENSE). Unless you state otherwise, any contribution you submit is licensed under the same terms, without additional terms.

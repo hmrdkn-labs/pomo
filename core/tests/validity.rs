@@ -33,7 +33,7 @@ fn cmd(body: CommandBody) -> Command {
 }
 
 fn start_cmd(planned_ms: i64) -> Command {
-    cmd(CommandBody::Start { kind: Kind::Focus, planned_ms, label: None, project: None })
+    cmd(CommandBody::Start { kind: Kind::Focus, planned_ms, label: None, project: None, if_idle: false })
 }
 
 #[test]

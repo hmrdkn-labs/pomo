@@ -26,9 +26,9 @@ The Daemon (`pomod`) serves this over HTTP on `127.0.0.1` only. The CLI (`pomo`)
 `Block` = `{"id","kind","label","project","source","device_id","started_ms","planned_ms","elapsed_ms","phase","outcome","ended_ms"}` (fields as in `events.md`; `outcome` and `ended_ms` null while live). For a live block `elapsed_ms` is the value at `now_ms`.
 
 ### `POST /v1/commands`
-Body: a Command, `{"type": "start|pause|resume|extend|skip|stop|reset|label", ...fields per events.md}`; durations as `planned_ms` / `add_ms`.
+Body: a Command, `{"type": "start|pause|resume|extend|skip|stop|reset|label", ...fields per events.md}`; durations as `planned_ms` / `add_ms`. `start` takes an optional `if_idle` boolean (default `false`): when `true` and a block is running or paused, the command is refused instead of abandoning it.
 `200`: `{"event": Event, "timer": Timer, "replayed": bool}` (`replayed` true when the idempotency key was already used).
-`409` when invalid for the current state.
+`409` when invalid for the current state, including `start` with `if_idle: true` over a live block (`a block is already running: <kind> "<label>" started by <source>`).
 
 ### `GET /v1/blocks?from_ms=&to_ms=&kind=&limit=`
 Blocks with `started_ms` in `[from_ms, to_ms)`, newest first, default limit 100, max 1000. `{"blocks": [Block]}`.
@@ -44,11 +44,11 @@ Server-sent events. Event `pomo.event` with the Event JSON as data, one per newl
 
 ## CLI
 
-`pomo <command> [--json] [--home DIR]`. Commands: `start [--kind focus|short|long] [--minutes N] [--label TEXT] [--project TEXT]` (default focus, 25 minutes; short 5; long 15), `pause`, `resume`, `extend --minutes N`, `skip`, `stop`, `reset`, `label TEXT [--block ID] [--project TEXT]`, `status`, `blocks [--since 7d] [--limit N]`, `stats [--since 7d] [--by day|label|project]`, `events --follow`, `mcp`. `--minutes` (and the MCP `minutes` arguments) must be a finite number greater than 0 and at most 1440 (24 h); anything else is rejected with a message before any request is made. `--source agent:<name>` sets the source header. Human output is one tidy line or a small table; `--json` prints exactly the API response body. Exit code 0 on success, 1 on a request error, 2 if the Daemon is not reachable (message says how to start it).
+`pomo <command> [--json] [--home DIR]`. Commands: `start [--kind focus|short|long] [--minutes N] [--label TEXT] [--project TEXT] [--if-idle]` (default focus, 25 minutes; short 5; long 15; `--if-idle` fails instead of replacing a live block), `pause`, `resume`, `extend --minutes N`, `skip`, `stop`, `reset`, `label TEXT [--block ID] [--project TEXT]`, `status`, `blocks [--since 7d] [--limit N]`, `stats [--since 7d] [--by day|label|project]`, `events --follow`, `mcp`. `--minutes` (and the MCP `minutes` arguments) must be a finite number greater than 0 and at most 1440 (24 h); anything else is rejected with a message before any request is made. `--source agent:<name>` sets the source header. Human output is one tidy line or a small table; `--json` prints exactly the API response body. Exit code 0 on success, 1 on a request error, 2 if the Daemon is not reachable (message says how to start it).
 
 ## MCP (`pomo mcp`, stdio)
 
-Tools, each returning the API response as JSON text, all with `source = agent:<mcp-client-name>` taken from the client's `initialize` info (fallback `agent:mcp`): `start_focus(minutes?, label?, project?)`, `start_break(kind: short|long, minutes?)`, `pause`, `resume`, `stop`, `skip`, `extend(minutes)`, `reset`, `label_block(label, project?, block_id?)`, `get_status`, `list_blocks(since?, limit?)`, `get_stats(since?, group_by?)`. `since` accepts `7d`, `24h` or an ISO-8601 timestamp. Tool descriptions say plainly what each does and what state it needs. A failed Command is returned as a tool error with the API error message.
+Tools, each returning the API response as JSON text, all with `source = agent:<mcp-client-name>` taken from the client's `initialize` info (fallback `agent:mcp`): `start_focus(minutes?, label?, project?, replace?)`, `start_break(kind: short|long, minutes?, replace?)`, `pause`, `resume`, `stop`, `skip`, `extend(minutes)`, `reset`, `label_block(label, project?, block_id?)`, `get_status`, `list_blocks(since?, limit?)`, `get_stats(since?, group_by?)`. `since` accepts `7d`, `24h` or an ISO-8601 timestamp. Tool descriptions say plainly what each does and what state it needs. `start_focus` and `start_break` send `if_idle = !replace`: over a running or paused block they return a tool error (`isError: true`) naming the live block and leave it running, unless `replace: true` (default false), which abandons it. A failed Command is returned as a tool error with the API error message.
 
 ## Devices and sync (added with the sync integration)
 
